@@ -8,6 +8,7 @@ on:
       - '.github/scripts/apply_signal_dot.py'
       - '.github/scripts/apply_ultra_fast_simple.py'
       - '.github/scripts/apply_fast_statistical_simple.py'
+      - '.github/scripts/simplify_signal_first_ui.py'
   workflow_dispatch:
 
 permissions:
@@ -34,6 +35,9 @@ jobs:
       - name: Apply lightweight statistical simple engine
         run: python .github/scripts/apply_fast_statistical_simple.py
 
+      - name: Make signal the whole simple experience
+        run: python .github/scripts/simplify_signal_first_ui.py
+
       - name: Syntax check
         run: python -m py_compile app.py
 
@@ -45,6 +49,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Make simple mode fast and lightweight"
+            git commit -m "Simplify simple mode around the direction signal"
             git push
           fi
