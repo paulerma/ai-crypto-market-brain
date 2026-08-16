@@ -1246,8 +1246,10 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
             target_label = dot_x.strftime("%d %b")
         else:
             target_label = dot_x.strftime("%b %Y")
-        label = f"VELA {target_label}: {short_label} · {probability*100:.1f}%"
-        hover = (f"Predicción: {short_label}<br>Vela objetivo: {target_label}"
+        if short_label == "LATERAL":
+            short_label = "SIN DIRECCIÓN"
+        label = f"{short_label} · {probability*100:.1f}% · {timeframe}"
+        hover = (f"Rumbo más probable: {short_label}"
                  f"<br>Confianza: {probability*100:.1f}%<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}")
 
         # Very subtle projected zone. It does not cover the candles or compete
@@ -1268,20 +1270,19 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         label = f"SIN SEÑAL FIABLE · {timeframe}"
         hover = f"Sin señal suficientemente fiable<br>Temporalidad: {timeframe}"
 
-    # MAIN INDICATOR: restore a clearly visible large point at the exact FUTURE
-    # candle start. Because dot_x is to the right of the forming candle, it never
-    # covers a real candle. A dotted guide identifies the target time.
-    fig.add_trace(go.Scatter(
-        x=[dot_x], y=[last_y], mode="markers",
-        marker={"size": 27, "color": dot_color, "line": {"color": "#ffffff", "width": 2}},
-        hovertemplate=hover + "<extra></extra>", showlegend=False, name="Predicción",
-    ))
-    fig.add_vline(x=dot_x, line_width=1, line_dash="dot", line_color=dot_color, opacity=0.60)
+    # MAIN INDICATOR: fixed signal rail OUTSIDE the price plot.
+    # It stays visually dominant but can never cover a candle.
+    fig.add_shape(
+        type="circle", xref="paper", yref="paper",
+        x0=1.018, x1=1.060, y0=0.47, y1=0.53,
+        fillcolor=dot_color, line={"color": "#ffffff", "width": 2},
+        layer="above",
+    )
     fig.add_annotation(
-        x=dot_x, y=last_y, xref="x", yref="y", text=f"<b>{label}</b>", showarrow=False,
-        xshift=14, yshift=32, xanchor="left",
+        x=1.078, y=0.50, xref="paper", yref="paper", text=f"<b>{label}</b>", showarrow=False,
+        xanchor="left", yanchor="middle", align="left",
         font={"color": dot_color, "size": 13},
-        bgcolor="rgba(8,11,15,.92)", bordercolor=dot_color, borderwidth=1, borderpad=4,
+        bgcolor="rgba(8,11,15,.94)", bordercolor=dot_color, borderwidth=1, borderpad=5,
         hovertext=hover,
     )
 
@@ -1300,20 +1301,21 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         except Exception:
             pass
 
-    # Keep a true empty projection area to the right. Historical candles end at
-    # last_x; the signal dot lives in its own future column.
+    # Keep only a small amount of price-chart breathing room; the signal itself
+    # is outside the plot, so there is no need for a large blank future area.
     try:
         span = last_x - first_x
         if span <= pd.Timedelta(0):
             span = pd.Timedelta(minutes=1)
-        right_edge = max(signal_right_x, last_x + span * 0.16)
+        min_future = pd.Timedelta(minutes=max(1.0, float(INTERVAL_MINUTES.get(timeframe, 1))) * max(1, int(horizon)))
+        right_edge = max(last_x + span * 0.035, last_x + min_future)
         fig.update_xaxes(range=[first_x, right_edge])
     except Exception:
         pass
 
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="#080b0f", plot_bgcolor="#080b0f",
-        height=650, margin=dict(l=8, r=18, t=58, b=48),
+        height=650, margin=dict(l=8, r=220, t=58, b=48),
         xaxis_rangeslider_visible=False, hovermode="x unified", dragmode="pan",
         showlegend=False, uirevision=f"simple-{symbol}-{timeframe}",
     )
@@ -1535,10 +1537,10 @@ if ui_mode == "Sencillo":
         if simple_state:
             sc = simple_state["scenario"]
             icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
-            label = "SUBE" if sc == "SUBIDA" else "BAJA" if sc == "BAJADA" else "LATERAL"
+            label = "SUBE" if sc == "SUBIDA" else "BAJA" if sc == "BAJADA" else "SIN DIRECCIÓN"
             strength = simple_state.get("reliability", "BAJA").lower()
-            st.markdown(f"### {icon} {selected} · VELA {target_text}: {label} · {simple_state['probability']*100:.1f}%")
-            st.caption(f"Predicción emitida antes de que empiece la vela {target_text} · usa solo velas cerradas · evidencia {strength}.")
+            st.markdown(f"### {icon} {selected} · {label} · {simple_state['probability']*100:.1f}%")
+            st.caption(f"Rumbo más probable desde aquí · {timeframe} · evidencia {strength}. La señal usa solo información ya disponible.")
         else:
             st.markdown(f"### ⚪ {selected} · DATOS INSUFICIENTES · {timeframe}")
 
@@ -1558,6 +1560,7 @@ if ui_mode == "Sencillo":
             audit[target_iso] = {
                 "scenario": simple_state["scenario"],
                 "confidence": float(simple_state["probability"]),
+                "reference_price": float(closed_simple["close"].iloc[-1]),
                 "resolved": False,
             }
         for ts_key, rec in list(audit.items()):
@@ -1568,7 +1571,8 @@ if ui_mode == "Sencillo":
             if hits.empty:
                 continue
             candle = hits.iloc[-1]
-            move = float(candle["close"] / candle["open"] - 1.0)
+            reference_price = float(rec.get("reference_price", candle["open"]))
+            move = float(candle["close"] / max(reference_price, 1e-12) - 1.0)
             neutral = {
                 "1m": 0.00020, "2m": 0.00025, "3m": 0.00030, "5m": 0.00040,
                 "10m": 0.00055, "15m": 0.00070, "30m": 0.0010, "45m": 0.0012,
@@ -1585,7 +1589,7 @@ if ui_mode == "Sencillo":
         if resolved:
             last_eval = resolved[-1]
             mark = "✅" if last_eval.get("correct") else "❌"
-            predicted_txt = "SUBE" if last_eval.get("scenario") == "SUBIDA" else "BAJA" if last_eval.get("scenario") == "BAJADA" else "LATERAL"
+            predicted_txt = "SUBE" if last_eval.get("scenario") == "SUBIDA" else "BAJA" if last_eval.get("scenario") == "BAJADA" else "SIN DIRECCIÓN"
             actual_txt = "SUBIÓ" if last_eval.get("actual") == "SUBIDA" else "BAJÓ" if last_eval.get("actual") == "BAJADA" else "LATERAL"
             st.caption(f"{mark} Última señal cerrada: predijo {predicted_txt} · resultado {actual_txt}")
 
@@ -1599,7 +1603,7 @@ if ui_mode == "Sencillo":
             st.toast(f"{selected} · {timeframe}: {txt}", icon="🔔")
         st.session_state[alert_key] = current_state
 
-        st.caption(f"Objetivo: vela futura {target_text}. 🟢 sube · 🔴 baja · 🟡 lateral. El punto avanza a la siguiente vela antes de que empiece.")
+        st.caption("🟢 sube · 🔴 baja · 🟡 sin dirección clara. El punto indica el rumbo más probable y no tapa las velas.")
 
     _render_fast_simple_mode()
     st.stop()
