@@ -1,11 +1,12 @@
-# AI Crypto Market Brain
+# AI Crypto Market Brain PRO
 
-Dashboard de análisis probabilístico de criptomonedas en Streamlit.
+Dashboard de análisis probabilístico de criptomonedas construido con Streamlit.
 
-- Dirección estimada: LONG / LATERAL / SHORT
-- Radar de volumen
-- Proyecciones por cierre de vela
-- Gestión de riesgo y stop loss
-- Temporalidades claras
+## Ejecutar en Streamlit Community Cloud
 
-> Herramienta experimental de análisis. No garantiza resultados ni ejecuta órdenes reales.
+- Archivo principal: `app.py`
+- Dependencias: `requirements.txt`
+- No requiere claves privadas para los datos públicos básicos de Binance.
+- `COINGECKO_API_KEY` es opcional y solo se usa por el adaptador de CoinGecko.
+
+> Aviso: las proyecciones son probabilísticas y no garantizan resultados de inversión.

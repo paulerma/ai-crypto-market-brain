@@ -1,0 +1,10 @@
+SI MACOS BLOQUEA INICIAR.command
+
+1. Pulsa “Listo”. NO pulses “Mover al basurero”.
+2. Ve a  > Configuración del Sistema > Privacidad y seguridad.
+3. Baja hasta encontrar el aviso sobre INICIAR.command.
+4. Pulsa “Abrir de todos modos”.
+5. Autoriza con Touch ID/contraseña si lo solicita.
+6. Vuelve a hacer doble clic en INICIAR.command y pulsa “Abrir”.
+
+No hace falta desactivar la seguridad general del Mac.

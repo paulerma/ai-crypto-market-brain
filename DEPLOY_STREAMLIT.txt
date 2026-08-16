@@ -1,0 +1,12 @@
+DESPLIEGUE WEB
+
+1. Crea un repositorio vacío en GitHub.
+2. Sube el contenido de esta carpeta a la raíz del repositorio.
+3. En Streamlit Community Cloud crea una app nueva.
+4. Selecciona el repositorio y la rama main.
+5. Main file path: app.py
+6. En Advanced settings selecciona Python 3.13 si está disponible; si no, usa 3.12.
+7. Deploy.
+
+La app quedará en una URL tipo:
+https://tu-nombre.streamlit.app
