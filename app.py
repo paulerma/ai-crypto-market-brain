@@ -1108,11 +1108,15 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
     first_x = pd.Timestamp(df.timestamp.iloc[0])
     last_y = float(df.close.iloc[-1])
     try:
-        # Visual anchor only: place the signal two slots to the right so it never
-        # covers the live/last candle. The forecast horizon itself is unchanged.
-        dot_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, 2))
+        # Reserve a separate visual signal column to the RIGHT of price.
+        # This is deliberately farther than one/two candles so the dot can never
+        # be mistaken for, or cover, a real candle. Forecast horizon is unchanged.
+        visual_slots = 6 if timeframe in ("1m", "2m", "3m", "5m", "10m", "15m") else 4
+        dot_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, visual_slots))
+        signal_right_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, visual_slots + 5))
     except Exception:
         dot_x = last_x
+        signal_right_x = last_x
 
     plan = None
     zone = None
@@ -1158,7 +1162,7 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
     # MAIN INDICATOR: one large dot at the right of the chart.
     fig.add_trace(go.Scatter(
         x=[dot_x], y=[last_y], mode="markers",
-        marker={"size": 30, "color": dot_color,
+        marker={"size": 24, "color": dot_color,
                 "line": {"color": "#ffffff", "width": 2}},
         hovertemplate=hover + "<extra></extra>",
         name="Señal principal", showlegend=False,
@@ -1186,12 +1190,13 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         except Exception:
             pass
 
-    # Leave breathing room to the right for the dot/label.
+    # Keep a true empty projection area to the right. Historical candles end at
+    # last_x; the signal dot lives in its own future column.
     try:
         span = last_x - first_x
         if span <= pd.Timedelta(0):
             span = pd.Timedelta(minutes=1)
-        right_edge = max(dot_x, last_x + span * 0.18)
+        right_edge = max(signal_right_x, last_x + span * 0.16)
         fig.update_xaxes(range=[first_x, right_edge])
     except Exception:
         pass
@@ -1202,7 +1207,25 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         xaxis_rangeslider_visible=False, hovermode="x unified", dragmode="pan",
         showlegend=False, uirevision=f"simple-{symbol}-{timeframe}",
     )
-    fig.update_xaxes(gridcolor="#171d24", fixedrange=False, showspikes=True, spikemode="across")
+    # TradingView-like temporal axis: clock for intraday, date for larger bars.
+    if timeframe in ("1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"):
+        tick_fmt = "%H:%M"
+        hover_fmt = "%d %b %Y · %H:%M"
+    elif timeframe == "1D":
+        tick_fmt = "%d %b"
+        hover_fmt = "%d %b %Y"
+    elif timeframe == "1W":
+        tick_fmt = "%d %b"
+        hover_fmt = "Semana · %d %b %Y"
+    else:
+        tick_fmt = "%b %Y"
+        hover_fmt = "%B %Y"
+
+    fig.update_xaxes(
+        gridcolor="#171d24", fixedrange=False, showspikes=True, spikemode="across",
+        spikesnap="cursor", tickformat=tick_fmt, hoverformat=hover_fmt,
+        showgrid=True, ticks="outside", ticklabelmode="instant",
+    )
     fig.update_yaxes(gridcolor="#171d24", fixedrange=False, side="right")
     return fig
 
