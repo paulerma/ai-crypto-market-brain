@@ -6,6 +6,7 @@ on:
       - '.github/workflows/simple-all-timeframes.yml'
       - '.github/scripts/apply_simple_market_view.py'
       - '.github/scripts/apply_signal_dot.py'
+      - '.github/scripts/apply_ultra_fast_simple.py'
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,9 @@ jobs:
       - name: Apply main signal dot
         run: python .github/scripts/apply_signal_dot.py
 
+      - name: Apply ultra-fast simple mode
+        run: python .github/scripts/apply_ultra_fast_simple.py
+
       - name: Syntax check
         run: python -m py_compile app.py
 
@@ -37,6 +41,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Make color dot the main market signal"
+            git commit -m "Speed up timeframe switching and add discreet stop"
             git push
           fi
