@@ -19,6 +19,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Repair patch script newline
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/make_signal_truly_forward.py')
+          s = p.read_text(encoding='utf-8')
+          bad = '# 8) Target the next candle that has NOT STARTED yet. If a candle is forming,\\n# predict the following candle with horizon=2 from the last closed bar.\\nold_engine ='
+          good = '# 8) Target the next candle that has NOT STARTED yet. If a candle is forming,\n# predict the following candle with horizon=2 from the last closed bar.\nold_engine ='
+          s = s.replace(bad, good)
+          p.write_text(s, encoding='utf-8')
+          PY
+
       - name: Make signal truly forward-looking and show chart time
         run: python .github/scripts/make_signal_truly_forward.py
 
