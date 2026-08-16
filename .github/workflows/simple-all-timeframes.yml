@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
-      - '.github/scripts/fix_fast_lateral_and_dot.py'
+      - '.github/scripts/separate_signal_and_time_axis.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fix fast lateral classification and dot placement
-        run: python .github/scripts/fix_fast_lateral_and_dot.py
+      - name: Separate signal and add TradingView-like time axis
+        run: python .github/scripts/separate_signal_and_time_axis.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Fix fast lateral classification and move signal dot"
+            git commit -m "Separate signal from candles and show chart time"
             git push
           fi
