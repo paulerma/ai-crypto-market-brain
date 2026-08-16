@@ -1,0 +1,72 @@
+name: Optimize app performance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply performance optimizations
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app.py")
+          text = path.read_text(encoding="utf-8")
+          original = text
+
+          replacements = [
+              ("@st.cache_data(ttl=30, show_spinner=False)\ndef fetch_binance_history", "@st.cache_data(ttl=180, show_spinner=False, max_entries=32)\ndef fetch_binance_history"),
+              ("@st.cache_data(ttl=30, show_spinner=False)\ndef fetch_timeframe_history", "@st.cache_data(ttl=180, show_spinner=False, max_entries=32)\ndef fetch_timeframe_history"),
+              ("def fetch_live_quote(symbol: str) -> dict:", "@st.cache_data(ttl=10, show_spinner=False, max_entries=16)\ndef fetch_live_quote(symbol: str) -> dict:"),
+              ("@st.cache_data(ttl=60, show_spinner=False)\ndef cached_breadth", "@st.cache_data(ttl=180, show_spinner=False)\ndef cached_breadth"),
+              ("@st.cache_data(ttl=60, show_spinner=False)\ndef cached_derivatives", "@st.cache_data(ttl=180, show_spinner=False)\ndef cached_derivatives"),
+              ("@st.cache_data(ttl=300, show_spinner=False)\ndef model_signal", "@st.cache_data(ttl=900, show_spinner=False, max_entries=96)\ndef model_signal"),
+              ("    model_names = ([\"logistic_regression\", \"random_forest\", \"gradient_boosting\", \"extra_trees\", \"hist_gradient_boosting\"]\n                   if deep else [\"logistic_regression\", \"random_forest\", \"hist_gradient_boosting\"])\n    n_folds = 5 if deep else 4", "    # Modo normal optimizado: dos modelos complementarios y 3 folds purgados.\n    # Conserva validación fuera de muestra, pero evita decenas de ajustes redundantes\n    # en cada horizonte. El modo deep mantiene la batería completa.\n    model_names = ([\"logistic_regression\", \"random_forest\", \"gradient_boosting\", \"extra_trees\", \"hist_gradient_boosting\"]\n                   if deep else [\"logistic_regression\", \"hist_gradient_boosting\"])\n    n_folds = 5 if deep else 3"),
+              ("    ensemble_n = 3\n    for _, mr in ranked.head(ensemble_n).iterrows():", "    ensemble_n = 3 if deep else 2\n    for _, mr in ranked.head(ensemble_n).iterrows():"),
+              ("def build_timing_rows(symbol_code: str):", "@st.cache_data(ttl=900, show_spinner=False, max_entries=12)\ndef build_timing_rows(symbol_code: str):"),
+              ("def build_candle_radar(symbol_code: str, timeframe: str, history_bars: int):", "@st.cache_data(ttl=900, show_spinner=False, max_entries=24)\ndef build_candle_radar(symbol_code: str, timeframe: str, history_bars: int):"),
+              ("La primera vez puede tardar porque cada horizonte se prueba fuera de muestra...", "La primera vez calcula y valida; después reutiliza resultados recientes para responder mucho más rápido..."),
+              ("Analizando 6 horizontes con validación temporal. La primera vez puede tardar varios minutos...", "Analizando 6 horizontes con validación temporal optimizada. Los resultados recientes se reutilizan automáticamente..."),
+          ]
+
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+
+          if text == original:
+              print("No changes needed; optimizations already applied.")
+          else:
+              path.write_text(text, encoding="utf-8")
+              print("Performance optimizations applied.")
+
+      - name: Syntax check
+        run: python - <<'PY'
+          import ast
+          from pathlib import Path
+          ast.parse(Path('app.py').read_text(encoding='utf-8'))
+          print('app.py syntax OK')
+          PY
+
+      - name: Commit optimized app
+        run: |
+          if git diff --quiet -- app.py; then
+            echo "No app.py changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Optimize Streamlit performance and caching"
+          git push
