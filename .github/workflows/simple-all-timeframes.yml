@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
       - '.github/scripts/apply_simple_market_view.py'
+      - '.github/scripts/apply_signal_dot.py'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,9 @@ jobs:
       - name: Apply simple market view
         run: python .github/scripts/apply_simple_market_view.py
 
+      - name: Apply main signal dot
+        run: python .github/scripts/apply_signal_dot.py
+
       - name: Syntax check
         run: python -m py_compile app.py
 
@@ -33,6 +37,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Simplify chart and enable all 1m-to-1M timeframes"
+            git commit -m "Make color dot the main market signal"
             git push
           fi
