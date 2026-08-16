@@ -806,6 +806,22 @@ def _strict_simple_state(signal):
     }
 
 
+
+@st.cache_data(ttl=1800, max_entries=96, show_spinner=False)
+def cached_simple_signal(symbol_code: str, timeframe: str, horizon: int, history_bars: int, last_closed_key: str):
+    """Validated signal cache keyed by market/timeframe/horizon/last closed candle."""
+    raw = fetch_timeframe_history(symbol_code, timeframe, int(history_bars) + 2)
+    closed = (raw[raw.is_closed]
+              .drop(columns=["is_closed"])
+              .tail(int(history_bars))
+              .reset_index(drop=True))
+    if closed.empty:
+        return {"ok": False, "reason": "Sin velas cerradas."}
+    # last_closed_key deliberately participates in the Streamlit cache key.
+    # It is not otherwise needed because `closed` already ends at that candle.
+    _ = last_closed_key
+    return model_signal(closed, horizon=int(horizon), deep=False)
+
 @st.cache_data(ttl=1800, max_entries=16, show_spinner=False)
 def monthly_consensus_state(symbol_code: str):
     """Monthly state requires daily + weekly validated agreement and monthly cycle alignment."""
@@ -856,98 +872,107 @@ def monthly_consensus_state(symbol_code: str):
 
 
 def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=None):
-    """Ultra-clean chart: candles plus one dominant signal dot on the right."""
+    """Ultra-clean chart: candles + one dominant signal dot + discreet stop."""
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df.timestamp,
-        open=df.open,
-        high=df.high,
-        low=df.low,
-        close=df.close,
-        name="Precio",
-        increasing_line_color="#2ecc71",
-        decreasing_line_color="#ff5c5c",
+        x=df.timestamp, open=df.open, high=df.high, low=df.low, close=df.close,
+        name="Precio", increasing_line_color="#2ecc71", decreasing_line_color="#ff5c5c",
     ))
 
     last_x = pd.Timestamp(df.timestamp.iloc[-1])
     first_x = pd.Timestamp(df.timestamp.iloc[0])
     last_y = float(df.close.iloc[-1])
-
     try:
         dot_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, 1))
     except Exception:
         dot_x = last_x
 
+    plan = None
+    zone = None
     if state:
         scenario = state["scenario"]
         if scenario == "SUBIDA":
             dot_color, short_label = "#2ecc71", "LONG"
+            if simple_forecast is not None:
+                zone, plan = simple_forecast.up, simple_forecast.long_plan
         elif scenario == "BAJADA":
             dot_color, short_label = "#ff5c5c", "SHORT"
+            if simple_forecast is not None:
+                zone, plan = simple_forecast.down, simple_forecast.short_plan
         else:
             dot_color, short_label = "#f2c94c", "LATERAL"
+            if simple_forecast is not None:
+                zone = simple_forecast.flat
 
         probability = float(state.get("probability", 0.0))
         reliability = str(state.get("reliability", "")).capitalize()
         label = f"{short_label} · {probability*100:.1f}% · {timeframe}"
-        hover = (
-            f"{short_label}<br>Confianza: {probability*100:.1f}%"
-            f"<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}"
-        )
+        hover = (f"{short_label}<br>Confianza: {probability*100:.1f}%"
+                 f"<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}")
+
+        # Very subtle projected zone. It does not cover the candles or compete
+        # visually with the main dot.
+        if zone is not None:
+            try:
+                end_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, int(horizon)))
+                fill = ("rgba(46,204,113,.055)" if scenario == "SUBIDA" else
+                        "rgba(255,92,92,.055)" if scenario == "BAJADA" else
+                        "rgba(242,201,76,.055)")
+                fig.add_shape(type="rect", x0=last_x, x1=end_x,
+                              y0=float(zone.low), y1=float(zone.high),
+                              fillcolor=fill, line_width=0, layer="below")
+            except Exception:
+                pass
     else:
         dot_color, short_label = "#9aa4ae", "SIN SEÑAL FIABLE"
         label = f"SIN SEÑAL FIABLE · {timeframe}"
         hover = f"Sin señal suficientemente fiable<br>Temporalidad: {timeframe}"
 
+    # MAIN INDICATOR: one large dot at the right of the chart.
     fig.add_trace(go.Scatter(
-        x=[dot_x],
-        y=[last_y],
-        mode="markers",
-        marker={
-            "size": 26,
-            "color": dot_color,
-            "line": {"color": "#ffffff", "width": 2},
-        },
+        x=[dot_x], y=[last_y], mode="markers",
+        marker={"size": 30, "color": dot_color,
+                "line": {"color": "#ffffff", "width": 2}},
         hovertemplate=hover + "<extra></extra>",
-        name="Señal principal",
-        showlegend=False,
+        name="Señal principal", showlegend=False,
     ))
-
     fig.add_annotation(
-        x=dot_x,
-        y=last_y,
-        text=f"<b>{label}</b>",
-        showarrow=False,
-        xshift=8,
-        yshift=31,
-        xanchor="left",
-        font={"color": dot_color, "size": 14},
-        bgcolor="rgba(8,11,15,.90)",
-        bordercolor=dot_color,
-        borderwidth=1,
-        borderpad=5,
+        x=dot_x, y=last_y, text=f"<b>{label}</b>", showarrow=False,
+        xshift=10, yshift=32, xanchor="left",
+        font={"color": dot_color, "size": 13},
+        bgcolor="rgba(8,11,15,.88)", bordercolor=dot_color,
+        borderwidth=1, borderpad=4,
     )
 
+    # Discreet stop-loss / technical invalidation only for validated LONG/SHORT.
+    if state and state.get("scenario") in ("SUBIDA", "BAJADA") and plan is not None:
+        try:
+            stop = float(plan.stop)
+            fig.add_hline(
+                y=stop, line_dash="dot", line_width=1,
+                line_color="rgba(255,255,255,.48)",
+                annotation_text=f"STOP {stop:,.2f}",
+                annotation_position="bottom right",
+                annotation_font={"size": 10, "color": "#b8c0c8"},
+            )
+        except Exception:
+            pass
+
+    # Leave breathing room to the right for the dot/label.
     try:
         span = last_x - first_x
         if span <= pd.Timedelta(0):
             span = pd.Timedelta(minutes=1)
-        right_edge = max(dot_x, last_x + span * 0.16)
+        right_edge = max(dot_x, last_x + span * 0.18)
         fig.update_xaxes(range=[first_x, right_edge])
     except Exception:
         pass
 
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#080b0f",
-        plot_bgcolor="#080b0f",
-        height=650,
-        margin=dict(l=8, r=18, t=30, b=8),
-        xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-        dragmode="pan",
-        showlegend=False,
-        uirevision=f"simple-{symbol}-{timeframe}",
+        template="plotly_dark", paper_bgcolor="#080b0f", plot_bgcolor="#080b0f",
+        height=650, margin=dict(l=8, r=18, t=28, b=8),
+        xaxis_rangeslider_visible=False, hovermode="x unified", dragmode="pan",
+        showlegend=False, uirevision=f"simple-{symbol}-{timeframe}",
     )
     fig.update_xaxes(gridcolor="#171d24", fixedrange=False, showspikes=True, spikemode="across")
     fig.update_yaxes(gridcolor="#171d24", fixedrange=False, side="right")
@@ -1029,6 +1054,8 @@ with st.sidebar:
         cached_breadth.clear()
         cached_derivatives.clear()
         model_signal.clear()
+        cached_simple_signal.clear()
+        monthly_consensus_state.clear()
         st.session_state.pop(f"timing_forecast::{selected}", None)
         st.session_state.pop(f"candle_radar::{selected}::{timeframe}", None)
         st.rerun()
@@ -1036,6 +1063,85 @@ with st.sidebar:
     st.markdown("---")
     st.caption("🟢 LIVE se actualiza aprox. cada 10 segundos. La IA usa la última vela CERRADA. El análisis predictivo se valida en minutos, horas, día y semana; mensual se usa como contexto de ciclo.")
 
+
+
+# ------------------------- Fast simple mode -------------------------
+if ui_mode == "Sencillo":
+    @st.fragment(run_every="90s")
+    def _render_fast_simple_mode():
+        need_simple = max(int(training_bars) + 2, int(chart_bars) + 2)
+        try:
+            full_simple = fetch_timeframe_history(SYMBOLS[selected], timeframe, need_simple)
+            closed_simple = (full_simple[full_simple.is_closed]
+                             .drop(columns=["is_closed"])
+                             .tail(int(training_bars))
+                             .reset_index(drop=True))
+            chart_simple = full_simple.drop(columns=["is_closed"]).tail(int(chart_bars)).reset_index(drop=True)
+        except Exception as e:
+            st.error(f"No se pudieron cargar datos de mercado: {e}")
+            return
+
+        if closed_simple.empty:
+            st.warning("Todavía no hay una vela cerrada disponible.")
+            return
+
+        last_closed_key = pd.Timestamp(closed_simple.timestamp.iloc[-1]).isoformat()
+
+        if timeframe == "1M":
+            simple_signal = {"ok": False}
+            simple_state = monthly_consensus_state(SYMBOLS[selected])
+        elif STANDARD_TIMEFRAMES[timeframe].direct_ai:
+            simple_signal = cached_simple_signal(
+                SYMBOLS[selected], timeframe, int(horizon), int(training_bars), last_closed_key
+            )
+            simple_state = _strict_simple_state(simple_signal)
+        else:
+            simple_signal = {"ok": False}
+            simple_state = None
+
+        simple_forecast_fast = None
+        if simple_signal.get("ok"):
+            band = projection_band(simple_signal, int(horizon))
+            if band is not None:
+                try:
+                    simple_forecast_fast = build_simple_forecast(
+                        closed_simple, float(simple_signal["price"]),
+                        simple_signal["pup"], simple_signal["pflat"], simple_signal["pdown"],
+                        band.get("low68"), band.get("high68"), simple_signal.get("atr"), int(horizon),
+                    )
+                except Exception:
+                    simple_forecast_fast = None
+
+        # Minimal header: one line, then the chart.
+        if simple_state:
+            sc = simple_state["scenario"]
+            icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
+            label = "LONG" if sc == "SUBIDA" else "SHORT" if sc == "BAJADA" else "LATERAL"
+            st.markdown(f"### {icon} {selected} · {label} · {simple_state['probability']*100:.1f}% · {timeframe}")
+        else:
+            st.markdown(f"### ⚪ {selected} · SIN SEÑAL FIABLE · {timeframe}")
+
+        fig_fast = simple_signal_chart(
+            chart_simple, selected, timeframe, int(horizon), simple_state, simple_forecast_fast
+        )
+        st.plotly_chart(fig_fast, width="stretch", theme=None,
+                        key=f"fast_simple_{selected}_{timeframe}_{horizon}", config=plot_config())
+
+        # Notify only on a real state change.
+        current_state = simple_state["scenario"] if simple_state else "NONE"
+        alert_key = f"fast_last_state::{selected}::{timeframe}"
+        previous_state = st.session_state.get(alert_key)
+        if previous_state is not None and previous_state != current_state:
+            txt = ("LONG" if current_state == "SUBIDA" else
+                   "SHORT" if current_state == "BAJADA" else
+                   "LATERAL" if current_state == "LATERAL" else "SIN SEÑAL FIABLE")
+            st.toast(f"{selected} · {timeframe}: {txt}", icon="🔔")
+        st.session_state[alert_key] = current_state
+
+        st.caption("La señal usa la última vela cerrada. Cambiar de temporalidad reutiliza el análisis ya calculado mientras esa vela no cambie.")
+
+    _render_fast_simple_mode()
+    st.stop()
 
 # ------------------------- Data -------------------------
 need = max(training_bars + 2, chart_bars + 2)
