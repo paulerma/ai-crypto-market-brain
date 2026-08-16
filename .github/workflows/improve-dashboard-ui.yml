@@ -1,0 +1,62 @@
+name: Improve dashboard UI
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/improve-dashboard-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Improve responsive metrics and simple summary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app.py')
+          s = p.read_text()
+
+          old_css = '''[data-testid="stMetric"]{background:#0f141a;border:1px solid #222a32;padding:10px;border-radius:10px}\n'''
+          new_css = '''[data-testid="stMetric"]{background:#0f141a;border:1px solid #222a32;padding:10px;border-radius:10px;min-width:0}\n[data-testid="stMetricValue"]{font-size:clamp(1.05rem,2vw,1.65rem)!important;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.12!important}\n[data-testid="stMetricLabel"] p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.15!important}\n'''
+          if old_css not in s:
+              raise SystemExit('CSS anchor not found')
+          s = s.replace(old_css, new_css, 1)
+
+          old_live = '''            c1, c2, c3, c4, c5 = st.columns(5)\n            c1.metric("🟢 LIVE · Precio", f"${q['price']:,.2f}")\n            c2.metric("Cambio 24h", f"{q['change_pct']:+.2f}%")\n            c3.metric("Máximo 24h", f"${q['high']:,.2f}")\n            c4.metric("Mínimo 24h", f"${q['low']:,.2f}")\n            c5.metric("Actualizado", q["time"].strftime("%H:%M:%S UTC"))\n'''
+          new_live = '''            c1, c2, c3 = st.columns(3)\n            c1.metric("🟢 LIVE · Precio", f"${q['price']:,.2f}")\n            c2.metric("Cambio 24 h", f"{q['change_pct']:+.2f}%")\n            c3.metric("Actualizado", q["time"].strftime("%H:%M:%S UTC"))\n            c4, c5 = st.columns(2)\n            c4.metric("Máximo 24 h", f"${q['high']:,.2f}")\n            c5.metric("Mínimo 24 h", f"${q['low']:,.2f}")\n'''
+          if old_live not in s:
+              raise SystemExit('Live strip anchor not found')
+          s = s.replace(old_live, new_live, 1)
+
+          old_top = '''c1, c2, c3, c4, c5 = st.columns(5)\n_top_dom = max((("SUBIDA", signal.get("pup", 0.0)), ("LATERAL", signal.get("pflat", 0.0)), ("BAJADA", signal.get("pdown", 0.0))), key=lambda x: x[1])[0] if signal.get("ok") else "N/A"\nc1.metric("Dirección IA", direction_label(_top_dom))\nc2.metric("Confianza modelo", f"{signal['decision'].confidence*100:.1f}%" if signal.get("ok") else "N/A")\nc3.metric("Tendencia", snap["trend"])\nc4.metric("Fuerza", snap["strength"])\nc5.metric("Último cierre analizado", pd.Timestamp(last_closed_time).strftime("%d %b %H:%M UTC"))\n'''
+          new_top = '''_top_dom = max((("SUBIDA", signal.get("pup", 0.0)), ("LATERAL", signal.get("pflat", 0.0)), ("BAJADA", signal.get("pdown", 0.0))), key=lambda x: x[1])[0] if signal.get("ok") else "N/A"\nc1, c2, c3 = st.columns(3)\nc1.metric("Dirección IA", direction_label(_top_dom))\nc2.metric("Confianza modelo", f"{signal['decision'].confidence*100:.1f}%" if signal.get("ok") else "N/A")\nc3.metric("Último cierre analizado", pd.Timestamp(last_closed_time).strftime("%d %b %H:%M UTC"))\nc4, c5, c6 = st.columns(3)\nc4.metric("Tendencia", snap["trend"])\nc5.metric("Fuerza", snap["strength"])\nc6.metric("Volumen", f"{volume_icon(vol_radar.direction)} {vol_radar.direction} · {vol_radar.intensity}/100")\n'''
+          if old_top not in s:
+              raise SystemExit('Top metrics anchor not found')
+          s = s.replace(old_top, new_top, 1)
+
+          hero_anchor = '''        st.markdown(\n            f'<div class="hero"><div class="muted">DIRECCIÓN MÁS PROBABLE DESPUÉS DEL ÚLTIMO CIERRE</div>'\n            f'<div style="font-size:2.45rem;font-weight:950">{bias_icon(bias)} {bias}</div>'\n            f'<div style="font-size:1.35rem;font-weight:800">{dom_prob*100:.1f}%</div>'\n            f'<div class="muted">Operativa ahora: <b>{practical}</b> · Calidad del modelo: {quality_plain(signal)}</div></div>',\n            unsafe_allow_html=True,\n        )\n'''
+          addition = hero_anchor + '''\n        # Plan dominante resumido: una sola lectura práctica sin obligar a buscar niveles más abajo.\n        lp = simple_forecast.long_plan\n        sp = simple_forecast.short_plan\n        st.markdown("#### 📍 Plan rápido del escenario dominante")\n        if dom == "SUBIDA":\n            p1, p2, p3 = st.columns(3)\n            p1.metric("Confirmación LONG", f"${lp.confirmation:,.2f}")\n            p2.metric("Stop si confirma", f"${lp.stop:,.2f}")\n            p3.metric("Objetivo", f"${lp.target_low:,.0f} – ${lp.target_high:,.0f}")\n            st.caption("No entra automáticamente: primero debe superar el nivel de confirmación.")\n        elif dom == "BAJADA":\n            p1, p2, p3 = st.columns(3)\n            p1.metric("Confirmación SHORT", f"${sp.confirmation:,.2f}")\n            p2.metric("Stop / invalidación", f"${sp.stop:,.2f}")\n            p3.metric("Objetivo", f"${sp.target_low:,.0f} – ${sp.target_high:,.0f}")\n            st.caption("No entra automáticamente: primero debe perder el nivel de confirmación.")\n        else:\n            p1, p2, p3 = st.columns(3)\n            p1.metric("Rango lateral", zone_text(simple_forecast.flat))\n            p2.metric("Ruptura alcista", f"> ${lp.confirmation:,.2f}")\n            p3.metric("Ruptura bajista", f"< ${sp.confirmation:,.2f}")\n            st.caption("Mientras siga dentro del rango, la lectura principal es esperar. Los niveles muestran qué ruptura vigilar.")\n\n        st.markdown("#### Probabilidades del horizonte seleccionado")\n        pr1, pr2, pr3 = st.columns(3)\n        pr1.metric("🟢 Subida", f"{signal['pup']*100:.1f}%")\n        pr2.metric("🟡 Lateral", f"{signal['pflat']*100:.1f}%")\n        pr3.metric("🔴 Bajada", f"{signal['pdown']*100:.1f}%")\n'''
+          if hero_anchor not in s:
+              raise SystemExit('Hero anchor not found')
+          s = s.replace(hero_anchor, addition, 1)
+
+          p.write_text(s)
+          PY
+      - name: Syntax check
+        run: python -m py_compile app.py
+      - name: Commit UI improvements
+        run: |
+          if git diff --quiet; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Improve dashboard readability and quick trading summary"
+          git push
