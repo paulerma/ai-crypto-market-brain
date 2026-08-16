@@ -869,7 +869,8 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     timeframe. It is deliberately selective: disagreement returns no colored signal.
     The rigorous ML/backtest engine is still available in Advanced mode.
     """
-    if closed is None or closed.empty or len(closed) < 180:
+    min_rows = 60 if timeframe == "1M" else 90 if timeframe == "1W" else 180
+    if closed is None or closed.empty or len(closed) < min_rows:
         return {"ok": False, "reason": "Histórico insuficiente"}
 
     features = build_features(closed)
@@ -896,10 +897,14 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     ))
     fwd = features["close"].shift(-int(horizon)) / features["close"] - 1.0
     analog = find_similar_cases(features, ANALOG_FEATURE_COLUMNS, fwd, int(horizon), k=50, flat_threshold=flat_thr)
-    if analog is None or analog.n_cases < 20:
-        return {"ok": False, "reason": "Sin suficientes patrones históricos comparables"}
-
-    analog_probs = np.array([analog.up_pct, analog.flat_pct, analog.down_pct], dtype=float) / 100.0
+    if analog is None or analog.n_cases < 12:
+        analog_probs = np.array([1/3, 1/3, 1/3], dtype=float)
+        analog_dom = None
+        analog_cases = 0
+    else:
+        analog_probs = np.array([analog.up_pct, analog.flat_pct, analog.down_pct], dtype=float) / 100.0
+        analog_dom = analog.dominant
+        analog_cases = int(analog.n_cases)
 
     # Technical direction from multiple independent measurements.
     tech_score = 0
@@ -956,7 +961,6 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     prob = float(probs[dom_i])
     margin = float(probs[dom_i] - probs[second_i])
 
-    analog_dom = analog.dominant
     confirmations = sum([
         analog_dom == dom,
         tech == dom,
@@ -985,7 +989,7 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         "state": state,
         "pup": float(probs[0]), "pflat": float(probs[1]), "pdown": float(probs[2]),
         "price": price, "atr": atr, "sigma": sigma,
-        "analog_cases": int(analog.n_cases), "technical": tech,
+        "analog_cases": int(analog_cases), "technical": tech,
         "volume_direction": vol_dir, "cycle": cycle_context,
     }
 
