@@ -1128,6 +1128,224 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     }
 
 
+
+
+def _duration_text(timeframe: str, bars: int) -> str:
+    """Human readable duration for a number of bars in the selected timeframe."""
+    bars = max(1, int(bars))
+    if timeframe == "1M":
+        return f"{bars} mes" if bars == 1 else f"{bars} meses"
+    if timeframe == "1W":
+        return f"{bars} semana" if bars == 1 else f"{bars} semanas"
+    if timeframe == "1D":
+        return f"{bars} día" if bars == 1 else f"{bars} días"
+    minutes = float(INTERVAL_MINUTES.get(timeframe, 1)) * bars
+    if minutes < 60:
+        return f"{int(round(minutes))} min"
+    hours = minutes / 60.0
+    if hours < 24:
+        return f"{hours:.0f} h" if abs(hours - round(hours)) < 1e-9 else f"{hours:.1f} h"
+    days = hours / 24.0
+    return f"{days:.0f} días" if abs(days - round(days)) < 1e-9 else f"{days:.1f} días"
+
+
+def current_trend_state(closed: pd.DataFrame, timeframe: str) -> dict:
+    """Describe the trend that is already present, without making a future claim."""
+    if closed is None or closed.empty or len(closed) < 35:
+        return {"scenario": "LATERAL", "strength": 0.0, "score": 0}
+    features = build_features(closed)
+    row = features.iloc[-1]
+    c = closed["close"].astype(float)
+    ema20 = c.ewm(span=20, adjust=False).mean()
+    ema50 = c.ewm(span=50, adjust=False).mean()
+    last = float(c.iloc[-1])
+    ret1 = float(c.iloc[-1] / c.iloc[-2] - 1.0) if len(c) >= 2 else 0.0
+    ret3 = float(c.iloc[-1] / c.iloc[-4] - 1.0) if len(c) >= 4 else ret1
+    slope20 = float(ema20.iloc[-1] / ema20.iloc[-5] - 1.0) if len(ema20) >= 5 else 0.0
+
+    score = 0
+    score += 1 if last >= float(ema20.iloc[-1]) else -1
+    score += 1 if float(ema20.iloc[-1]) >= float(ema50.iloc[-1]) else -1
+    score += 1 if slope20 >= 0 else -1
+    score += 1 if float(row.get("macd_hist_pct", 0.0)) >= 0 else -1
+    score += 1 if float(row.get("di_spread", 0.0)) >= 0 else -1
+    score += 1 if ret3 >= 0 else -1
+
+    # Very fast charts need the recent turn to matter more than slow averages.
+    if timeframe in ("1m", "2m", "3m", "5m"):
+        score += 1 if ret1 >= 0 else -1
+        score += 1 if ret3 >= 0 else -1
+        max_score = 8
+    else:
+        max_score = 6
+
+    adx = float(row.get("adx_14", 0.0))
+    try:
+        recent = closed.tail(8)
+        recent_range = float((recent["high"].max() - recent["low"].min()) / max(last, 1e-12))
+        atr_pct = float(row.get("atr_pct", 0.0))
+        compressed = recent_range <= max(atr_pct * 1.6, 0.0008)
+    except Exception:
+        compressed = False
+
+    if abs(score) <= 1 and (adx < 18 or compressed):
+        scenario = "LATERAL"
+    elif score > 0:
+        scenario = "SUBIDA"
+    else:
+        scenario = "BAJADA"
+    return {
+        "scenario": scenario,
+        "strength": float(min(1.0, abs(score) / max(max_score, 1))),
+        "score": int(score),
+    }
+
+
+@st.cache_data(ttl=300, max_entries=96, show_spinner=False)
+def trend_transition_forecast(closed: pd.DataFrame, timeframe: str, cycle_context: str | None) -> dict:
+    """Infer a transition window from several horizons of the SAME timeframe.
+
+    We do not claim an exact turning timestamp. A transition is surfaced only
+    when the opposite direction is supported by two consecutive horizons.
+    """
+    current = current_trend_state(closed, timeframe)
+    horizons = [1, 2, 4, 8]
+    future = []
+    for h in horizons:
+        try:
+            res = fast_statistical_signal(closed, timeframe, int(h), cycle_context)
+            state = res.get("state") if res.get("ok") else None
+            if state:
+                future.append({
+                    "horizon": int(h),
+                    "scenario": state.get("scenario", "LATERAL"),
+                    "probability": float(state.get("probability", 0.5)),
+                    "reliability": state.get("reliability", "BAJA"),
+                })
+            else:
+                future.append({"horizon": int(h), "scenario": "LATERAL", "probability": 0.5, "reliability": "BAJA"})
+        except Exception:
+            future.append({"horizon": int(h), "scenario": "LATERAL", "probability": 0.5, "reliability": "BAJA"})
+
+    current_dir = current["scenario"]
+    transition = None
+    for i in range(len(future) - 1):
+        a, b = future[i], future[i + 1]
+        candidate = a["scenario"]
+        if candidate not in ("SUBIDA", "BAJADA"):
+            continue
+        if candidate == current_dir:
+            continue
+        if b["scenario"] != candidate:
+            continue
+        # Require a real directional edge, not a 50/50 flip.
+        if min(a["probability"], b["probability"]) < 0.54:
+            continue
+        previous_h = future[i - 1]["horizon"] if i > 0 else 0
+        start_h = max(1, previous_h)
+        end_h = int(a["horizon"])
+        if end_h < start_h:
+            end_h = start_h
+        transition = {
+            "to": candidate,
+            "start_bars": int(start_h),
+            "end_bars": int(end_h),
+            "probability": float((a["probability"] + b["probability"]) / 2.0),
+            "reliability": "ALTA" if a["reliability"] == "ALTA" and b["reliability"] == "ALTA" else "MEDIA",
+        }
+        break
+
+    return {
+        "current": current,
+        "transition": transition,
+        "future": future,
+        "max_horizon": horizons[-1],
+    }
+
+
+def transition_window_text(timeframe: str, transition: dict | None, max_horizon: int) -> str:
+    if not transition:
+        return f"sin cambio claro en próximas {_duration_text(timeframe, max_horizon)}"
+    a = _duration_text(timeframe, int(transition["start_bars"]))
+    b = _duration_text(timeframe, int(transition["end_bars"]))
+    if a == b:
+        return f"aprox. en {a}"
+    return f"entre {a} y {b}"
+
+
+def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict):
+    """Clean TradingView-like chart with trend status outside the candles."""
+    fig = go.Figure()
+    plot_df = df.copy()
+    plot_ts = pd.to_datetime(plot_df["timestamp"], utc=True)
+    plot_df["timestamp"] = plot_ts.dt.tz_convert(CHART_TZ).dt.tz_localize(None)
+    fig.add_trace(go.Candlestick(
+        x=plot_df.timestamp,
+        open=plot_df.open, high=plot_df.high, low=plot_df.low, close=plot_df.close,
+        name="Precio", increasing_line_color="#2ecc71", decreasing_line_color="#ff5c5c",
+    ))
+
+    current = trend_info.get("current", {})
+    cur = current.get("scenario", "LATERAL")
+    cur_color = "#2ecc71" if cur == "SUBIDA" else "#ff5c5c" if cur == "BAJADA" else "#f2c94c"
+    cur_label = "ALCISTA" if cur == "SUBIDA" else "BAJISTA" if cur == "BAJADA" else "SIN TENDENCIA"
+
+    tr = trend_info.get("transition")
+    if tr:
+        to = tr["to"]
+        next_color = "#2ecc71" if to == "SUBIDA" else "#ff5c5c"
+        next_label = "ALCISTA" if to == "SUBIDA" else "BAJISTA"
+        window = transition_window_text(timeframe, tr, int(trend_info.get("max_horizon", 8)))
+        second = f"POSIBLE CAMBIO A {next_label} · {window}"
+        second_color = next_color
+    else:
+        second = transition_window_text(timeframe, None, int(trend_info.get("max_horizon", 8))).upper()
+        second_color = "#9aa4ae"
+
+    # Signal rail is outside the price area, so no candle is ever covered.
+    fig.add_shape(type="circle", xref="paper", yref="paper",
+                  x0=1.018, x1=1.058, y0=0.59, y1=0.65,
+                  fillcolor=cur_color, line={"color": "#ffffff", "width": 2})
+    fig.add_annotation(x=1.074, y=0.62, xref="paper", yref="paper",
+                       text=f"<b>TENDENCIA AHORA: {cur_label}</b>", showarrow=False,
+                       xanchor="left", font={"color": cur_color, "size": 14})
+    fig.add_annotation(x=1.074, y=0.52, xref="paper", yref="paper",
+                       text=f"<b>{second}</b>", showarrow=False,
+                       xanchor="left", align="left",
+                       font={"color": second_color, "size": 12})
+    if tr:
+        fig.add_annotation(x=1.074, y=0.45, xref="paper", yref="paper",
+                           text=f"evidencia {str(tr.get('reliability','MEDIA')).lower()} · {tr.get('probability',0.5)*100:.0f}%",
+                           showarrow=False, xanchor="left",
+                           font={"color": "#8b949e", "size": 11})
+
+    if timeframe in ("1m", "2m", "3m", "5m", "10m", "15m"):
+        tick_fmt, hover_fmt = "%H:%M", "%d %b %Y · %H:%M"
+    elif timeframe in ("30m", "45m", "1h", "2h", "3h", "4h"):
+        tick_fmt, hover_fmt = "%d %b\n%H:%M", "%d %b %Y · %H:%M"
+    elif timeframe == "1D":
+        tick_fmt, hover_fmt = "%d %b", "%d %b %Y"
+    elif timeframe == "1W":
+        tick_fmt, hover_fmt = "%d %b", "Semana · %d %b %Y"
+    else:
+        tick_fmt, hover_fmt = "%b %Y", "%B %Y"
+
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#080b0f", plot_bgcolor="#080b0f",
+        height=650, margin=dict(l=8, r=300, t=36, b=48),
+        xaxis_rangeslider_visible=False, hovermode="x unified", dragmode="pan",
+        showlegend=False, uirevision=f"trend-{symbol}-{timeframe}",
+    )
+    fig.update_xaxes(
+        gridcolor="#171d24", fixedrange=False, showspikes=True, spikemode="across",
+        spikesnap="cursor", tickformat=tick_fmt, hoverformat=hover_fmt,
+        showgrid=True, showticklabels=True, ticks="outside", ticklen=5,
+        tickcolor="#65707c", tickfont={"size": 11, "color": "#aab4bf"},
+        nticks=13, automargin=True,
+    )
+    fig.update_yaxes(gridcolor="#171d24", fixedrange=False, side="right")
+    return fig
+
 @st.cache_data(ttl=1800, max_entries=16, show_spinner=False)
 def monthly_consensus_state(symbol_code: str):
     """Monthly state requires daily + weekly validated agreement and monthly cycle alignment."""
@@ -1333,7 +1551,7 @@ def store_df(key, value):
 
 # ------------------------- Sidebar -------------------------
 st.markdown("## AI Crypto Market Brain <span style='font-size:.9rem;color:#7d8590'>PRO · Fase 3.8 TEMPORALIDADES CLARAS</span>", unsafe_allow_html=True)
-st.caption("Elige activo y temporalidad. El punto de color en la gráfica es la señal principal.")
+st.caption("Elige activo y temporalidad. La vista sencilla detecta la tendencia actual y el próximo cambio probable.")
 
 with st.sidebar:
     st.markdown("### 📌 MERCADO")
@@ -1366,7 +1584,7 @@ with st.sidebar:
             "Temporalidad",
             _simple_tfs,
             index=_simple_tfs.index("1h"),
-            help="El punto de la gráfica indica el rumbo más probable para esta temporalidad.",
+            help="Muestra la tendencia actual y una ventana probable para el próximo cambio de tendencia.",
         )
         timeframe_label = next(k for k, v in TIMEFRAME_UI.items() if v == timeframe)
         chart_bars = 180
@@ -1440,11 +1658,13 @@ with st.sidebar:
 
 # ------------------------- Fast simple mode -------------------------
 if ui_mode == "Sencillo":
-    _simple_refresh = "5s" if timeframe == "1m" else "10s" if timeframe in ("2m", "3m", "5m") else "20s" if timeframe in ("10m", "15m") else "30s"
+    # Trend detection does not need candle-by-candle model reruns. Refresh the
+    # recent tail often enough to notice a new closed bar, while cached trend
+    # calculations are reused until the data actually changes.
+    _simple_refresh = "10s" if timeframe == "1m" else "15s" if timeframe in ("2m", "3m", "5m") else "30s" if timeframe in ("10m", "15m", "30m", "45m") else "60s"
+
     @st.fragment(run_every=_simple_refresh)
     def _render_fast_simple_mode():
-        # Keep SIMPLE mode intentionally lean. 1,200 candles are enough for the
-        # analogue engine; daily/weekly cycle context is fetched separately and cached.
         fast_history = min(int(training_bars), 1200)
         need_simple = max(fast_history + 2, int(chart_bars) + 2)
         try:
@@ -1465,126 +1685,50 @@ if ui_mode == "Sencillo":
             return
 
         if closed_simple.empty:
-            st.warning("Todavía no hay una vela cerrada disponible.")
+            st.warning("Todavía no hay suficiente histórico cerrado para detectar tendencia.")
             return
 
-        # Strict forward prediction: the target candle must not have started yet.
-        # The engine uses ONLY closed candles. If one candle is currently forming,
-        # horizon=2 predicts the close of the following, still-unopened candle.
-        forming_simple = full_simple[~full_simple.is_closed]
-        last_closed_open = pd.Timestamp(closed_simple.timestamp.iloc[-1])
-        if not forming_simple.empty:
-            current_open = pd.Timestamp(forming_simple.timestamp.iloc[-1])
-            target_time = future_time(current_open.to_pydatetime(), timeframe, 1)
-            prediction_horizon = 2
-        else:
-            target_time = future_time(last_closed_open.to_pydatetime(), timeframe, 1)
-            prediction_horizon = 1
-
         cycle = fast_cycle_context(SYMBOLS[selected])
-        fast_result = fast_statistical_signal(closed_simple, timeframe, int(prediction_horizon), cycle)
-        simple_state = fast_result.get("state") if fast_result.get("ok") else None
+        trend_info = trend_transition_forecast(closed_simple, timeframe, cycle)
+        current = trend_info.get("current", {})
+        cur = current.get("scenario", "LATERAL")
+        cur_icon = "🟢" if cur == "SUBIDA" else "🔴" if cur == "BAJADA" else "🟡"
+        cur_label = "ALCISTA" if cur == "SUBIDA" else "BAJISTA" if cur == "BAJADA" else "SIN TENDENCIA"
 
-        simple_forecast_fast = None
-        if fast_result.get("ok"):
-            try:
-                band = volatility_projection(
-                    float(fast_result["price"]), fast_result.get("sigma"),
-                    float(fast_result["atr"]), int(prediction_horizon), barrier_k=1.5,
-                )
-                simple_forecast_fast = build_simple_forecast(
-                    closed_simple, float(fast_result["price"]),
-                    float(fast_result["pup"]), float(fast_result["pflat"]), float(fast_result["pdown"]),
-                    band.low68, band.high68, float(fast_result["atr"]), int(prediction_horizon),
-                )
-            except Exception:
-                simple_forecast_fast = None
-
-        _target = pd.Timestamp(target_time)
-        if _target.tzinfo is None:
-            _target = _target.tz_localize("UTC")
-        target_local = _target.tz_convert(CHART_TZ)
-        if timeframe in ("1m", "2m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h", "4h"):
-            target_text = target_local.strftime("%H:%M")
-        elif timeframe in ("1D", "1W"):
-            target_text = target_local.strftime("%d %b")
+        st.markdown(f"### {cur_icon} {selected} · {timeframe} · {cur_label}")
+        tr = trend_info.get("transition")
+        if tr:
+            to_icon = "🟢" if tr["to"] == "SUBIDA" else "🔴"
+            to_label = "ALCISTA" if tr["to"] == "SUBIDA" else "BAJISTA"
+            window = transition_window_text(timeframe, tr, int(trend_info.get("max_horizon", 8)))
+            st.markdown(f"**{to_icon} Posible cambio a {to_label}: {window}**")
+            st.caption(f"Evidencia {str(tr.get('reliability','MEDIA')).lower()} · confianza estimada {tr.get('probability',0.5)*100:.0f}%. Es una ventana probabilística, no una hora exacta.")
         else:
-            target_text = target_local.strftime("%b %Y")
+            window = transition_window_text(timeframe, None, int(trend_info.get("max_horizon", 8)))
+            st.caption(f"No se detecta un cambio de tendencia suficientemente consistente: {window}.")
 
-        # TradingView-style candle countdown. target_time is the next candle start,
-        # therefore also the exact close boundary of the candle currently forming.
-        render_candle_countdown(target_time, timeframe)
-
-        if simple_state:
-            sc = simple_state["scenario"]
-            icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
-            label = "SUBE" if sc == "SUBIDA" else "BAJA" if sc == "BAJADA" else "SIN DIRECCIÓN"
-            strength = simple_state.get("reliability", "BAJA").lower()
-            st.markdown(f"### {icon} {selected} · {label} · {simple_state['probability']*100:.1f}%")
-            st.caption(f"Rumbo más probable desde aquí · {timeframe} · evidencia {strength}. La señal usa solo información ya disponible.")
-        else:
-            st.markdown(f"### ⚪ {selected} · DATOS INSUFICIENTES · {timeframe}")
-
-        fig_fast = simple_signal_chart(
-            chart_simple, selected, timeframe, int(prediction_horizon), simple_state, simple_forecast_fast, target_time=target_time
-        )
+        fig_fast = trend_chart(chart_simple, selected, timeframe, trend_info)
         st.plotly_chart(fig_fast, width="stretch", theme=None,
-                        key=f"fast_simple_{selected}_{timeframe}_{prediction_horizon}_{target_text}", config=plot_config())
+                        key=f"trend_simple_{selected}_{timeframe}", config=plot_config())
 
-        # Forward audit: store the signal BEFORE the target candle starts, then
-        # score it only after that candle closes. Session-local by design; a
-        # persistent audit can be added later without cluttering simple mode.
-        audit_key = f"forward_audit::{selected}::{timeframe}"
-        audit = st.session_state.get(audit_key, {})
-        target_iso = pd.Timestamp(target_time).isoformat()
-        if simple_state and target_iso not in audit:
-            audit[target_iso] = {
-                "scenario": simple_state["scenario"],
-                "confidence": float(simple_state["probability"]),
-                "reference_price": float(closed_simple["close"].iloc[-1]),
-                "resolved": False,
-            }
-        for ts_key, rec in list(audit.items()):
-            if rec.get("resolved"):
-                continue
-            ts = pd.Timestamp(ts_key)
-            hits = full_simple[(full_simple["timestamp"] == ts) & (full_simple["is_closed"])]
-            if hits.empty:
-                continue
-            candle = hits.iloc[-1]
-            reference_price = float(rec.get("reference_price", candle["open"]))
-            move = float(candle["close"] / max(reference_price, 1e-12) - 1.0)
-            neutral = {
-                "1m": 0.00020, "2m": 0.00025, "3m": 0.00030, "5m": 0.00040,
-                "10m": 0.00055, "15m": 0.00070, "30m": 0.0010, "45m": 0.0012,
-                "1h": 0.0015, "2h": 0.0020, "3h": 0.0025, "4h": 0.0030,
-                "1D": 0.0050, "1W": 0.012, "1M": 0.025,
-            }.get(timeframe, 0.0015)
-            actual = "SUBIDA" if move > neutral else "BAJADA" if move < -neutral else "LATERAL"
-            rec["actual"] = actual
-            rec["correct"] = bool(actual == rec.get("scenario"))
-            rec["resolved"] = True
-            rec["move"] = move
-        st.session_state[audit_key] = dict(list(audit.items())[-40:])
-        resolved = [r for r in audit.values() if r.get("resolved")]
-        if resolved:
-            last_eval = resolved[-1]
-            mark = "✅" if last_eval.get("correct") else "❌"
-            predicted_txt = "SUBE" if last_eval.get("scenario") == "SUBIDA" else "BAJA" if last_eval.get("scenario") == "BAJADA" else "SIN DIRECCIÓN"
-            actual_txt = "SUBIÓ" if last_eval.get("actual") == "SUBIDA" else "BAJÓ" if last_eval.get("actual") == "BAJADA" else "LATERAL"
-            st.caption(f"{mark} Última señal cerrada: predijo {predicted_txt} · resultado {actual_txt}")
+        # Notify only when the ACTUAL detected trend changes, not on every candle.
+        alert_key = f"trend_state::{selected}::{timeframe}"
+        previous = st.session_state.get(alert_key)
+        if previous is not None and previous != cur:
+            text = "ALCISTA" if cur == "SUBIDA" else "BAJISTA" if cur == "BAJADA" else "SIN TENDENCIA"
+            st.toast(f"{selected} · {timeframe}: cambio de tendencia detectado → {text}", icon="🔔")
+        st.session_state[alert_key] = cur
 
-        current_state = simple_state["scenario"] if simple_state else "NONE"
-        alert_key = f"fast_last_state::{selected}::{timeframe}"
-        previous_state = st.session_state.get(alert_key)
-        if previous_state is not None and previous_state != current_state:
-            txt = ("SUBE" if current_state == "SUBIDA" else
-                   "BAJA" if current_state == "BAJADA" else
-                   "LATERAL" if current_state == "LATERAL" else "SIN SEÑAL FIABLE")
-            st.toast(f"{selected} · {timeframe}: {txt}", icon="🔔")
-        st.session_state[alert_key] = current_state
+        # Notify when a NEW transition window appears or changes direction.
+        watch_key = f"trend_watch::{selected}::{timeframe}"
+        watch_now = None if not tr else (tr.get("to"), tr.get("start_bars"), tr.get("end_bars"))
+        watch_prev = st.session_state.get(watch_key)
+        if watch_now is not None and watch_prev is not None and watch_now != watch_prev:
+            to_text = "ALCISTA" if tr["to"] == "SUBIDA" else "BAJISTA"
+            st.toast(f"Posible próximo cambio → {to_text} · {transition_window_text(timeframe, tr, trend_info.get('max_horizon',8))}", icon="🔔")
+        st.session_state[watch_key] = watch_now
 
-        st.caption("🟢 sube · 🔴 baja · 🟡 sin dirección clara. El punto indica el rumbo más probable y no tapa las velas.")
+        st.caption("🟢 tendencia alcista · 🔴 tendencia bajista · 🟡 sin tendencia clara. La app busca cambios de tendencia por temporalidad, no vela por vela.")
 
     _render_fast_simple_mode()
     st.stop()
