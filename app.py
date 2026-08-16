@@ -60,7 +60,9 @@ st.markdown("""
 .muted{color:#8b949e;font-size:.78rem}.big{font-size:1.55rem;font-weight:800}.tiny{font-size:.72rem;color:#7d8590}
 .buy{color:#2ecc71;font-weight:900}.sell{color:#ff5c5c;font-weight:900}.wait{color:#f2c94c;font-weight:900}
 .good{color:#2ecc71}.warn{color:#f2c94c}.bad{color:#ff5c5c}
-[data-testid="stMetric"]{background:#0f141a;border:1px solid #222a32;padding:10px;border-radius:10px}
+[data-testid="stMetric"]{background:#0f141a;border:1px solid #222a32;padding:10px;border-radius:10px;min-width:0}
+[data-testid="stMetricValue"]{font-size:clamp(1.05rem,2vw,1.65rem)!important;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.12!important}
+[data-testid="stMetricLabel"] p{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.15!important}
 .stTabs [data-baseweb="tab-list"]{gap:8px}.stTabs [data-baseweb="tab"]{background:#0f141a;border-radius:8px;padding:8px 14px}
 hr{border-color:#242b33}
 </style>
@@ -767,12 +769,13 @@ def render_live_strip(symbol_code: str):
     def _live():
         try:
             q = fetch_live_quote(symbol_code)
-            c1, c2, c3, c4, c5 = st.columns(5)
+            c1, c2, c3 = st.columns(3)
             c1.metric("🟢 LIVE · Precio", f"${q['price']:,.2f}")
-            c2.metric("Cambio 24h", f"{q['change_pct']:+.2f}%")
-            c3.metric("Máximo 24h", f"${q['high']:,.2f}")
-            c4.metric("Mínimo 24h", f"${q['low']:,.2f}")
-            c5.metric("Actualizado", q["time"].strftime("%H:%M:%S UTC"))
+            c2.metric("Cambio 24 h", f"{q['change_pct']:+.2f}%")
+            c3.metric("Actualizado", q["time"].strftime("%H:%M:%S UTC"))
+            c4, c5 = st.columns(2)
+            c4.metric("Máximo 24 h", f"${q['high']:,.2f}")
+            c5.metric("Mínimo 24 h", f"${q['low']:,.2f}")
         except Exception:
             st.warning("Precio LIVE temporalmente no disponible. El análisis con velas cerradas sigue funcionando.")
     _live()
@@ -891,13 +894,15 @@ closed_row = closed_features.iloc[-1]
 snap = technical_snapshot(closed_row)
 vol_radar = analyze_volume(closed_row)
 
-c1, c2, c3, c4, c5 = st.columns(5)
 _top_dom = max((("SUBIDA", signal.get("pup", 0.0)), ("LATERAL", signal.get("pflat", 0.0)), ("BAJADA", signal.get("pdown", 0.0))), key=lambda x: x[1])[0] if signal.get("ok") else "N/A"
+c1, c2, c3 = st.columns(3)
 c1.metric("Dirección IA", direction_label(_top_dom))
 c2.metric("Confianza modelo", f"{signal['decision'].confidence*100:.1f}%" if signal.get("ok") else "N/A")
-c3.metric("Tendencia", snap["trend"])
-c4.metric("Fuerza", snap["strength"])
-c5.metric("Último cierre analizado", pd.Timestamp(last_closed_time).strftime("%d %b %H:%M UTC"))
+c3.metric("Último cierre analizado", pd.Timestamp(last_closed_time).strftime("%d %b %H:%M UTC"))
+c4, c5, c6 = st.columns(3)
+c4.metric("Tendencia", snap["trend"])
+c5.metric("Fuerza", snap["strength"])
+c6.metric("Volumen", f"{volume_icon(vol_radar.direction)} {vol_radar.direction} · {vol_radar.intensity}/100")
 try:
     if timeframe in ("1M", "3M", "6M", "12M"):
         _months = {"1M": 1, "3M": 3, "6M": 6, "12M": 12}[timeframe]
@@ -932,6 +937,35 @@ with simple_tab:
             f'<div class="muted">Operativa ahora: <b>{practical}</b> · Calidad del modelo: {quality_plain(signal)}</div></div>',
             unsafe_allow_html=True,
         )
+
+        # Plan dominante resumido: una sola lectura práctica sin obligar a buscar niveles más abajo.
+        lp = simple_forecast.long_plan
+        sp = simple_forecast.short_plan
+        st.markdown("#### 📍 Plan rápido del escenario dominante")
+        if dom == "SUBIDA":
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Confirmación LONG", f"${lp.confirmation:,.2f}")
+            p2.metric("Stop si confirma", f"${lp.stop:,.2f}")
+            p3.metric("Objetivo", f"${lp.target_low:,.0f} – ${lp.target_high:,.0f}")
+            st.caption("No entra automáticamente: primero debe superar el nivel de confirmación.")
+        elif dom == "BAJADA":
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Confirmación SHORT", f"${sp.confirmation:,.2f}")
+            p2.metric("Stop / invalidación", f"${sp.stop:,.2f}")
+            p3.metric("Objetivo", f"${sp.target_low:,.0f} – ${sp.target_high:,.0f}")
+            st.caption("No entra automáticamente: primero debe perder el nivel de confirmación.")
+        else:
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Rango lateral", zone_text(simple_forecast.flat))
+            p2.metric("Ruptura alcista", f"> ${lp.confirmation:,.2f}")
+            p3.metric("Ruptura bajista", f"< ${sp.confirmation:,.2f}")
+            st.caption("Mientras siga dentro del rango, la lectura principal es esperar. Los niveles muestran qué ruptura vigilar.")
+
+        st.markdown("#### Probabilidades del horizonte seleccionado")
+        pr1, pr2, pr3 = st.columns(3)
+        pr1.metric("🟢 Subida", f"{signal['pup']*100:.1f}%")
+        pr2.metric("🟡 Lateral", f"{signal['pflat']*100:.1f}%")
+        pr3.metric("🔴 Bajada", f"{signal['pdown']*100:.1f}%")
 
         # Volume radar: simple closed-candle confirmation layer. It detects
         # current participation/aggression; it does not claim future volume is guaranteed.
