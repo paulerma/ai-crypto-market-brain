@@ -4,6 +4,56 @@ import ast
 p = Path("app.py")
 s = p.read_text(encoding="utf-8")
 
+# 0) The SIMPLE signal should work on every timeframe.  Use a smaller minimum
+# sample only for weekly/monthly bars, where 180 closed candles can be many years.
+old_min = '''    if closed is None or closed.empty or len(closed) < 180:
+        return {"ok": False, "reason": "Histórico insuficiente"}
+'''
+new_min = '''    min_rows = 60 if timeframe == "1M" else 90 if timeframe == "1W" else 180
+    if closed is None or closed.empty or len(closed) < min_rows:
+        return {"ok": False, "reason": "Histórico insuficiente"}
+'''
+if old_min in s:
+    s = s.replace(old_min, new_min, 1)
+elif new_min not in s:
+    raise RuntimeError("No se encontró el mínimo histórico del motor rápido")
+
+# If historical-neighbour matching is sparse, do not hide the direction.
+# Fall back to a neutral analogue prior and let trend/momentum/volume/cycle vote.
+old_analog = '''    analog = find_similar_cases(features, ANALOG_FEATURE_COLUMNS, fwd, int(horizon), k=50, flat_threshold=flat_thr)
+    if analog is None or analog.n_cases < 20:
+        return {"ok": False, "reason": "Sin suficientes patrones históricos comparables"}
+
+    analog_probs = np.array([analog.up_pct, analog.flat_pct, analog.down_pct], dtype=float) / 100.0
+'''
+new_analog = '''    analog = find_similar_cases(features, ANALOG_FEATURE_COLUMNS, fwd, int(horizon), k=50, flat_threshold=flat_thr)
+    if analog is None or analog.n_cases < 12:
+        analog_probs = np.array([1/3, 1/3, 1/3], dtype=float)
+        analog_dom = None
+        analog_cases = 0
+    else:
+        analog_probs = np.array([analog.up_pct, analog.flat_pct, analog.down_pct], dtype=float) / 100.0
+        analog_dom = analog.dominant
+        analog_cases = int(analog.n_cases)
+'''
+if old_analog in s:
+    s = s.replace(old_analog, new_analog, 1)
+elif new_analog not in s:
+    raise RuntimeError("No se encontró el bloque de análogos del motor rápido")
+
+old_analog_dom = '''    analog_dom = analog.dominant
+    confirmations = sum([
+'''
+new_analog_dom = '''    confirmations = sum([
+'''
+if old_analog_dom in s:
+    s = s.replace(old_analog_dom, new_analog_dom, 1)
+elif new_analog_dom not in s:
+    raise RuntimeError("No se encontró analog_dom antes de confirmaciones")
+
+s = s.replace('"analog_cases": int(analog.n_cases), "technical": tech,',
+              '"analog_cases": int(analog_cases), "technical": tech,', 1)
+
 # 1) Make the fast statistical engine always expose its dominant reading.
 # Reliability remains explicit, so a weak reading is not presented as a strong one.
 old_gate = '''    # Very selective gate. If evidence disagrees, gray is preferable to a false color.
