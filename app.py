@@ -931,6 +931,23 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     except Exception:
         vol_dir, vol_strength = "LATERAL", 0.35
 
+    # Immediate impulse: last closed candle + last three candles, normalized by
+    # the volatility of the selected timeframe. It is strongest on 1m-5m.
+    try:
+        c = closed["close"].astype(float)
+        r1 = float(c.iloc[-1] / c.iloc[-2] - 1.0)
+        r3 = float(c.iloc[-1] / c.iloc[-4] - 1.0) if len(c) >= 4 else r1
+        impulse_value = r1 + 0.45 * r3
+        impulse_thr = max(flat_floor * 0.55, max(atr_pct, 1e-6) * 0.16)
+        if impulse_value > impulse_thr:
+            impulse = "SUBIDA"
+        elif impulse_value < -impulse_thr:
+            impulse = "BAJADA"
+        else:
+            impulse = "LATERAL"
+    except Exception:
+        impulse = "LATERAL"
+
     idx = {"SUBIDA": 0, "LATERAL": 1, "BAJADA": 2}
     score = 0.62 * analog_probs
     weights = 0.62
@@ -945,6 +962,13 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     vol_dist = vol_dist / vol_dist.sum()
     score += 0.07 * vol_dist
     weights += 0.07
+
+    impulse_weight = 0.22 if timeframe in ("1m", "2m", "3m", "5m") else 0.15 if timeframe in ("10m", "15m", "30m", "45m") else 0.10
+    impulse_dist = np.full(3, 0.14)
+    impulse_dist[idx[impulse]] = 0.72
+    impulse_dist = impulse_dist / impulse_dist.sum()
+    score += impulse_weight * impulse_dist
+    weights += impulse_weight
 
     if cycle_context in idx:
         cyc = np.full(3, 0.15)
@@ -965,6 +989,7 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         analog_dom == dom,
         tech == dom,
         vol_dir == dom,
+        impulse == dom,
         cycle_context == dom if cycle_context else False,
     ])
 
@@ -981,7 +1006,7 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         "scenario": dom,
         "probability": prob,
         "reliability": "ALTA" if high else "MEDIA" if medium else "BAJA",
-        "source": "patrones históricos + tendencia + momentum + volumen + ciclo",
+        "source": "patrones históricos + tendencia + momentum + volumen + impulso inmediato + ciclo",
     }
 
     return {
@@ -990,7 +1015,7 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         "pup": float(probs[0]), "pflat": float(probs[1]), "pdown": float(probs[2]),
         "price": price, "atr": atr, "sigma": sigma,
         "analog_cases": int(analog_cases), "technical": tech,
-        "volume_direction": vol_dir, "cycle": cycle_context,
+        "volume_direction": vol_dir, "impulse": impulse, "cycle": cycle_context,
     }
 
 
@@ -1078,7 +1103,7 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
 
         probability = float(state.get("probability", 0.0))
         reliability = str(state.get("reliability", "")).capitalize()
-        label = f"{short_label} · {probability*100:.1f}% · {timeframe}"
+        label = f"PRÓXIMO: {short_label} · {probability*100:.1f}% · {timeframe}"
         hover = (f"{short_label}<br>Confianza: {probability*100:.1f}%"
                  f"<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}")
 
@@ -1195,9 +1220,16 @@ with st.sidebar:
         timeframe_label = next(k for k, v in TIMEFRAME_UI.items() if v == timeframe)
         chart_bars = 180
         horizon_name = "Automático"
-        # Four candles smooths 1m noise without making the user choose a period.
-        # 1m -> ~4 min, 1h -> ~4 h, 1D -> ~4 días, etc.
-        horizon = 4
+        # The simple signal answers the NEXT move. Faster charts use a shorter
+        # horizon so 1m does not average away an immediate directional move.
+        _auto_horizon = {
+            "1m": 1, "2m": 1, "3m": 1,
+            "5m": 2, "10m": 2, "15m": 2,
+            "30m": 3, "45m": 3,
+            "1h": 3, "2h": 3, "3h": 3, "4h": 3,
+            "1D": 2, "1W": 2, "1M": 1,
+        }
+        horizon = _auto_horizon.get(timeframe, 2)
     else:
         timeframe_label = st.selectbox(
             "Temporalidad",
@@ -1301,7 +1333,7 @@ if ui_mode == "Sencillo":
             icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
             label = "SUBE" if sc == "SUBIDA" else "BAJA" if sc == "BAJADA" else "LATERAL"
             strength = simple_state.get("reliability", "BAJA").lower()
-            st.markdown(f"### {icon} {selected} · {label} · {simple_state['probability']*100:.1f}% · {timeframe}")
+            st.markdown(f"### {icon} {selected} · PRÓXIMO: {label} · {simple_state['probability']*100:.1f}% · {timeframe}")
             st.caption(f"Evidencia {strength} · el color muestra el rumbo más probable, no una certeza.")
         else:
             st.markdown(f"### ⚪ {selected} · DATOS INSUFICIENTES · {timeframe}")
@@ -1322,7 +1354,7 @@ if ui_mode == "Sencillo":
             st.toast(f"{selected} · {timeframe}: {txt}", icon="🔔")
         st.session_state[alert_key] = current_state
 
-        st.caption("🟢 sube · 🔴 baja · 🟡 lateral. El resto del análisis trabaja por detrás.")
+        st.caption(f"Señal para las próximas {horizon} vela(s) de {timeframe}. 🟢 sube · 🔴 baja · 🟡 lateral.")
 
     _render_fast_simple_mode()
     st.stop()
