@@ -856,7 +856,7 @@ def monthly_consensus_state(symbol_code: str):
 
 
 def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=None):
-    """One clean chart: price plus green/red/yellow evidence area, or gray when evidence is insufficient."""
+    """Ultra-clean chart: candles plus one dominant signal dot on the right."""
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=df.timestamp,
@@ -868,68 +868,81 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         increasing_line_color="#2ecc71",
         decreasing_line_color="#ff5c5c",
     ))
-    palette = {
-        "SUBIDA": ("#2ecc71", "rgba(46,204,113,.15)", "ALCISTA"),
-        "BAJADA": ("#ff5c5c", "rgba(255,92,92,.15)", "BAJISTA"),
-        "LATERAL": ("#f2c94c", "rgba(242,201,76,.15)", "LATERAL"),
-    }
+
     last_x = pd.Timestamp(df.timestamp.iloc[-1])
+    first_x = pd.Timestamp(df.timestamp.iloc[0])
     last_y = float(df.close.iloc[-1])
+
+    try:
+        dot_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, 1))
+    except Exception:
+        dot_x = last_x
 
     if state:
         scenario = state["scenario"]
-        line_color, fill_color, label = palette[scenario]
-        end_x = pd.Timestamp(future_time(last_x.to_pydatetime(), timeframe, int(horizon)))
-        zone = None
-        plan = None
-        if simple_forecast is not None:
-            if scenario == "SUBIDA":
-                zone, plan = simple_forecast.up, simple_forecast.long_plan
-            elif scenario == "BAJADA":
-                zone, plan = simple_forecast.down, simple_forecast.short_plan
-            else:
-                zone = simple_forecast.flat
+        if scenario == "SUBIDA":
+            dot_color, short_label = "#2ecc71", "LONG"
+        elif scenario == "BAJADA":
+            dot_color, short_label = "#ff5c5c", "SHORT"
+        else:
+            dot_color, short_label = "#f2c94c", "LATERAL"
 
-        if end_x > last_x:
-            if zone is not None:
-                fig.add_shape(
-                    type="rect", x0=last_x, x1=end_x,
-                    y0=float(zone.low), y1=float(zone.high),
-                    fillcolor=fill_color,
-                    line={"color": line_color, "width": 1},
-                    layer="below",
-                )
-                label_y = (float(zone.low) + float(zone.high)) / 2.0
-            else:
-                fig.add_vrect(x0=last_x, x1=end_x, fillcolor=fill_color, line_width=0, layer="below")
-                label_y = last_y
-            fig.add_annotation(
-                x=end_x, y=label_y,
-                text=f"{label}<br>{state['probability']*100:.0f}%",
-                showarrow=False,
-                font={"color": line_color, "size": 15},
-                bgcolor="rgba(8,11,15,.80)",
-            )
-        if plan is not None and scenario in ("SUBIDA", "BAJADA"):
-            fig.add_hline(
-                y=float(plan.stop), line_dash="dot", line_color=line_color,
-                annotation_text="Invalidación",
-            )
-    else:
-        fig.add_annotation(
-            x=last_x, y=last_y,
-            text="SIN SEÑAL SUFICIENTEMENTE FIABLE",
-            showarrow=True,
-            font={"color": "#b7bec7", "size": 14},
-            bgcolor="rgba(8,11,15,.84)",
+        probability = float(state.get("probability", 0.0))
+        reliability = str(state.get("reliability", "")).capitalize()
+        label = f"{short_label} · {probability*100:.1f}% · {timeframe}"
+        hover = (
+            f"{short_label}<br>Confianza: {probability*100:.1f}%"
+            f"<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}"
         )
+    else:
+        dot_color, short_label = "#9aa4ae", "SIN SEÑAL FIABLE"
+        label = f"SIN SEÑAL FIABLE · {timeframe}"
+        hover = f"Sin señal suficientemente fiable<br>Temporalidad: {timeframe}"
+
+    fig.add_trace(go.Scatter(
+        x=[dot_x],
+        y=[last_y],
+        mode="markers",
+        marker={
+            "size": 26,
+            "color": dot_color,
+            "line": {"color": "#ffffff", "width": 2},
+        },
+        hovertemplate=hover + "<extra></extra>",
+        name="Señal principal",
+        showlegend=False,
+    ))
+
+    fig.add_annotation(
+        x=dot_x,
+        y=last_y,
+        text=f"<b>{label}</b>",
+        showarrow=False,
+        xshift=8,
+        yshift=31,
+        xanchor="left",
+        font={"color": dot_color, "size": 14},
+        bgcolor="rgba(8,11,15,.90)",
+        bordercolor=dot_color,
+        borderwidth=1,
+        borderpad=5,
+    )
+
+    try:
+        span = last_x - first_x
+        if span <= pd.Timedelta(0):
+            span = pd.Timedelta(minutes=1)
+        right_edge = max(dot_x, last_x + span * 0.16)
+        fig.update_xaxes(range=[first_x, right_edge])
+    except Exception:
+        pass
 
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#080b0f",
         plot_bgcolor="#080b0f",
         height=650,
-        margin=dict(l=8, r=8, t=38, b=8),
+        margin=dict(l=8, r=18, t=30, b=8),
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
         dragmode="pan",
@@ -1074,7 +1087,7 @@ if ui_mode == "Sencillo":
     else:
         st.markdown(f"## ⚪ {selected} · SIN SEÑAL CLARA")
         st.caption(
-            f"{timeframe_label} · no se colorea la gráfica hasta que el análisis supere los filtros de fiabilidad."
+            f"{timeframe_label} · el punto queda gris hasta que el análisis supere los filtros de fiabilidad."
         )
 
     simple_fig = simple_signal_chart(
