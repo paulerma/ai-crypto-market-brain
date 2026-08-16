@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
       - '.github/scripts/simplify_signal_first_ui.py'
+      - '.github/scripts/improve_next_move_signal.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +20,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Make signal the whole simple experience
-        run: python .github/scripts/simplify_signal_first_ui.py
+      - name: Improve next-move signal
+        run: python .github/scripts/improve_next_move_signal.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +34,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Simplify simple mode around the direction signal"
+            git commit -m "Refine immediate direction signal by timeframe"
             git push
           fi
