@@ -7,6 +7,7 @@ import requests
 import pandas as pd
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 
 ROOT = Path(__file__).resolve().parent
@@ -50,6 +51,45 @@ ALL_CLASSES = [-1, 0, 1]
 DEFAULT_HISTORY = {k: v.default_history for k, v in STANDARD_TIMEFRAMES.items()}
 VISIBLE_OPTIONS = [100, 200, 350, 500, 800]
 CHART_TZ = ZoneInfo("America/Hermosillo")
+
+
+
+def render_candle_countdown(next_candle_time, timeframe: str):
+    """TradingView-like countdown to the close of the currently forming candle.
+
+    `next_candle_time` is the start of the next candle, which is exactly the
+    close boundary of the candle forming now. The browser updates the clock; no
+    model rerun is required each second.
+    """
+    target = pd.Timestamp(next_candle_time)
+    if target.tzinfo is None:
+        target = target.tz_localize("UTC")
+    target_ms = int(target.tz_convert("UTC").timestamp() * 1000)
+    html = f"""
+    <div style="display:flex;align-items:center;gap:8px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;
+                color:#c9d1d9;background:#0d1117;border:1px solid #29313a;border-radius:8px;
+                width:max-content;padding:5px 10px;margin:0 0 4px 0;font-size:13px">
+      <span style="color:#8b949e">VELA ACTUAL · CIERRA EN</span>
+      <span id="candleClock" style="font-variant-numeric:tabular-nums;font-weight:800;color:#f0f3f6">--:--</span>
+    </div>
+    <script>
+      const target = {target_ms};
+      function tick() {{
+        const left = Math.max(0, target - Date.now());
+        const total = Math.ceil(left / 1000);
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const sec = total % 60;
+        let txt;
+        if (h > 0) txt = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        else txt = String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+        document.getElementById('candleClock').textContent = txt;
+      }}
+      tick();
+      setInterval(tick, 250);
+    </script>
+    """
+    components.html(html, height=36, scrolling=False)
 
 st.markdown("""
 <style>
@@ -1047,13 +1087,29 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         except Exception:
             truly_lateral = impulse == "LATERAL"
         if not truly_lateral:
-            directional = [idx["SUBIDA"], idx["BAJADA"]]
-            dom_i = max(directional, key=lambda i: float(probs[i]))
-            dom = labels[dom_i]
-            second_i = idx["LATERAL"] if probs[idx["LATERAL"]] >= probs[directional[1 if dom_i == directional[0] else 0]] else directional[1 if dom_i == directional[0] else 0]
+            up_i, down_i = idx["SUBIDA"], idx["BAJADA"]
+            directional_total = float(probs[up_i] + probs[down_i])
+            if directional_total > 1e-9:
+                up_cond = float(probs[up_i] / directional_total)
+                down_cond = float(probs[down_i] / directional_total)
+                if up_cond >= down_cond:
+                    dom_i, dom = up_i, "SUBIDA"
+                    directional_confidence = up_cond
+                else:
+                    dom_i, dom = down_i, "BAJADA"
+                    directional_confidence = down_cond
+            else:
+                directional_confidence = 0.5
 
-    prob = float(probs[dom_i])
-    margin = float(probs[dom_i] - probs[second_i])
+    # For a forced fast-timeframe directional decision, the meaningful number is
+    # P(up | up-or-down), not the original three-class share. This prevents
+    # misleading labels such as BAJA 24.6%.
+    if 'directional_confidence' in locals() and dom in ("SUBIDA", "BAJADA"):
+        prob = float(directional_confidence)
+        margin = float(abs(prob - (1.0 - prob)))
+    else:
+        prob = float(probs[dom_i])
+        margin = float(probs[dom_i] - probs[second_i])
 
     confirmations = sum([
         analog_dom == dom,
@@ -1212,19 +1268,18 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
         label = f"SIN SEÑAL FIABLE · {timeframe}"
         hover = f"Sin señal suficientemente fiable<br>Temporalidad: {timeframe}"
 
-    # MAIN INDICATOR: a prediction lane at the TOP of the chart. The x-position
-    # is the future candle start; y uses paper coordinates, so it can never cover price.
-    slot_minutes = max(float(INTERVAL_MINUTES.get(timeframe, 1)), 1.0)
-    half = pd.Timedelta(minutes=slot_minutes * 0.20)
-    fig.add_shape(
-        type="circle", xref="x", yref="paper",
-        x0=dot_x - half, x1=dot_x + half, y0=0.925, y1=0.975,
-        fillcolor=dot_color, line={"color": "#ffffff", "width": 2}, layer="above",
-    )
-    fig.add_vline(x=dot_x, line_width=1, line_dash="dot", line_color=dot_color, opacity=0.55)
+    # MAIN INDICATOR: restore a clearly visible large point at the exact FUTURE
+    # candle start. Because dot_x is to the right of the forming candle, it never
+    # covers a real candle. A dotted guide identifies the target time.
+    fig.add_trace(go.Scatter(
+        x=[dot_x], y=[last_y], mode="markers",
+        marker={"size": 27, "color": dot_color, "line": {"color": "#ffffff", "width": 2}},
+        hovertemplate=hover + "<extra></extra>", showlegend=False, name="Predicción",
+    ))
+    fig.add_vline(x=dot_x, line_width=1, line_dash="dot", line_color=dot_color, opacity=0.60)
     fig.add_annotation(
-        x=dot_x, y=0.985, xref="x", yref="paper", text=f"<b>{label}</b>", showarrow=False,
-        xanchor="center", yanchor="bottom",
+        x=dot_x, y=last_y, xref="x", yref="y", text=f"<b>{label}</b>", showarrow=False,
+        xshift=14, yshift=32, xanchor="left",
         font={"color": dot_color, "size": 13},
         bgcolor="rgba(8,11,15,.92)", bordercolor=dot_color, borderwidth=1, borderpad=4,
         hovertext=hover,
@@ -1473,6 +1528,10 @@ if ui_mode == "Sencillo":
         else:
             target_text = target_local.strftime("%b %Y")
 
+        # TradingView-style candle countdown. target_time is the next candle start,
+        # therefore also the exact close boundary of the candle currently forming.
+        render_candle_countdown(target_time, timeframe)
+
         if simple_state:
             sc = simple_state["scenario"]
             icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
@@ -1488,6 +1547,47 @@ if ui_mode == "Sencillo":
         )
         st.plotly_chart(fig_fast, width="stretch", theme=None,
                         key=f"fast_simple_{selected}_{timeframe}_{prediction_horizon}_{target_text}", config=plot_config())
+
+        # Forward audit: store the signal BEFORE the target candle starts, then
+        # score it only after that candle closes. Session-local by design; a
+        # persistent audit can be added later without cluttering simple mode.
+        audit_key = f"forward_audit::{selected}::{timeframe}"
+        audit = st.session_state.get(audit_key, {})
+        target_iso = pd.Timestamp(target_time).isoformat()
+        if simple_state and target_iso not in audit:
+            audit[target_iso] = {
+                "scenario": simple_state["scenario"],
+                "confidence": float(simple_state["probability"]),
+                "resolved": False,
+            }
+        for ts_key, rec in list(audit.items()):
+            if rec.get("resolved"):
+                continue
+            ts = pd.Timestamp(ts_key)
+            hits = full_simple[(full_simple["timestamp"] == ts) & (full_simple["is_closed"])]
+            if hits.empty:
+                continue
+            candle = hits.iloc[-1]
+            move = float(candle["close"] / candle["open"] - 1.0)
+            neutral = {
+                "1m": 0.00020, "2m": 0.00025, "3m": 0.00030, "5m": 0.00040,
+                "10m": 0.00055, "15m": 0.00070, "30m": 0.0010, "45m": 0.0012,
+                "1h": 0.0015, "2h": 0.0020, "3h": 0.0025, "4h": 0.0030,
+                "1D": 0.0050, "1W": 0.012, "1M": 0.025,
+            }.get(timeframe, 0.0015)
+            actual = "SUBIDA" if move > neutral else "BAJADA" if move < -neutral else "LATERAL"
+            rec["actual"] = actual
+            rec["correct"] = bool(actual == rec.get("scenario"))
+            rec["resolved"] = True
+            rec["move"] = move
+        st.session_state[audit_key] = dict(list(audit.items())[-40:])
+        resolved = [r for r in audit.values() if r.get("resolved")]
+        if resolved:
+            last_eval = resolved[-1]
+            mark = "✅" if last_eval.get("correct") else "❌"
+            predicted_txt = "SUBE" if last_eval.get("scenario") == "SUBIDA" else "BAJA" if last_eval.get("scenario") == "BAJADA" else "LATERAL"
+            actual_txt = "SUBIÓ" if last_eval.get("actual") == "SUBIDA" else "BAJÓ" if last_eval.get("actual") == "BAJADA" else "LATERAL"
+            st.caption(f"{mark} Última señal cerrada: predijo {predicted_txt} · resultado {actual_txt}")
 
         current_state = simple_state["scenario"] if simple_state else "NONE"
         alert_key = f"fast_last_state::{selected}::{timeframe}"
