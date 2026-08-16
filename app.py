@@ -1070,46 +1070,32 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
 
     probs = score / max(weights, 1e-9)
     probs = probs / probs.sum()
-    ordered = np.argsort(probs)[::-1]
-    dom_i, second_i = int(ordered[0]), int(ordered[1])
-    labels = ["SUBIDA", "LATERAL", "BAJADA"]
-    dom = labels[dom_i]
 
-    # In very fast timeframes, LATERAL is only valid when price is genuinely
-    # compressed AND the immediate impulse is also neutral. A directional turn
-    # should not be painted yellow merely because historical analogues are flat.
-    if timeframe in ("1m", "2m", "3m", "5m") and dom == "LATERAL":
-        try:
-            recent = closed.tail(6)
-            recent_range = float((recent["high"].max() - recent["low"].min()) / max(price, 1e-9))
-            compression_limit = max(flat_floor * 3.0, max(atr_pct, 1e-6) * 1.35)
-            truly_lateral = impulse == "LATERAL" and recent_range <= compression_limit
-        except Exception:
-            truly_lateral = impulse == "LATERAL"
-        if not truly_lateral:
-            up_i, down_i = idx["SUBIDA"], idx["BAJADA"]
-            directional_total = float(probs[up_i] + probs[down_i])
-            if directional_total > 1e-9:
-                up_cond = float(probs[up_i] / directional_total)
-                down_cond = float(probs[down_i] / directional_total)
-                if up_cond >= down_cond:
-                    dom_i, dom = up_i, "SUBIDA"
-                    directional_confidence = up_cond
-                else:
-                    dom_i, dom = down_i, "BAJADA"
-                    directional_confidence = down_cond
-            else:
-                directional_confidence = 0.5
-
-    # For a forced fast-timeframe directional decision, the meaningful number is
-    # P(up | up-or-down), not the original three-class share. This prevents
-    # misleading labels such as BAJA 24.6%.
-    if 'directional_confidence' in locals() and dom in ("SUBIDA", "BAJADA"):
-        prob = float(directional_confidence)
-        margin = float(abs(prob - (1.0 - prob)))
+    # Main SIMPLE signal answers only one question: is price more likely to go UP or DOWN?
+    # LATERAL/SIN DIRECCION is reserved for an almost exact directional tie.
+    up_raw = float(probs[idx["SUBIDA"]])
+    down_raw = float(probs[idx["BAJADA"]])
+    directional_total = up_raw + down_raw
+    if directional_total <= 1e-9:
+        up_cond = down_cond = 0.5
     else:
-        prob = float(probs[dom_i])
-        margin = float(probs[dom_i] - probs[second_i])
+        up_cond = up_raw / directional_total
+        down_cond = down_raw / directional_total
+
+    # Tiny dead-zone only. The user should normally see green or red, not yellow.
+    tie_band = 0.02  # 48%-52% = truly undecided
+    if abs(up_cond - down_cond) <= tie_band:
+        dom = "LATERAL"
+        prob = float(max(up_cond, down_cond))
+        margin = float(abs(up_cond - down_cond))
+    elif up_cond > down_cond:
+        dom = "SUBIDA"
+        prob = float(up_cond)
+        margin = float(up_cond - down_cond)
+    else:
+        dom = "BAJADA"
+        prob = float(down_cond)
+        margin = float(down_cond - up_cond)
 
     confirmations = sum([
         analog_dom == dom,
@@ -1123,11 +1109,8 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
     # currently most probable in the selected timeframe?  We therefore expose
     # the dominant class even when evidence is weak, but we NEVER hide the
     # uncertainty: strength is labelled BAJA / MEDIA / ALTA.
-    high = prob >= 0.60 and margin >= 0.16 and confirmations >= 3
-    if dom in ("SUBIDA", "BAJADA"):
-        medium = prob >= 0.47 and margin >= 0.07 and confirmations >= 2
-    else:
-        medium = prob >= 0.44 and margin >= 0.05 and confirmations >= 1
+    high = dom in ("SUBIDA", "BAJADA") and prob >= 0.62 and margin >= 0.24 and confirmations >= 3
+    medium = dom in ("SUBIDA", "BAJADA") and prob >= 0.55 and margin >= 0.10 and confirmations >= 2
     state = {
         "scenario": dom,
         "probability": prob,
@@ -1234,7 +1217,7 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
             if simple_forecast is not None:
                 zone, plan = simple_forecast.down, simple_forecast.short_plan
         else:
-            dot_color, short_label = "#f2c94c", "LATERAL"
+            dot_color, short_label = "#f2c94c", "SIN DIRECCIÓN"
             if simple_forecast is not None:
                 zone = simple_forecast.flat
 
@@ -1246,8 +1229,6 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
             target_label = dot_x.strftime("%d %b")
         else:
             target_label = dot_x.strftime("%b %Y")
-        if short_label == "LATERAL":
-            short_label = "SIN DIRECCIÓN"
         label = f"{short_label} · {probability*100:.1f}% · {timeframe}"
         hover = (f"Rumbo más probable: {short_label}"
                  f"<br>Confianza: {probability*100:.1f}%<br>Temporalidad: {timeframe}<br>Evidencia: {reliability}")
