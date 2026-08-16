@@ -84,7 +84,7 @@ def rr_text(rr: float | None) -> str:
 @st.cache_data(ttl=30, show_spinner=False)
 def fetch_binance_history(symbol: str, interval: str, total: int = 1500) -> pd.DataFrame:
     """Fetch recent public Binance klines with pagination."""
-    url = "https://api.binance.com/api/v3/klines"
+    url = "https://data-api.binance.vision/api/v3/klines"
     chunks = []
     end_time = None
     remaining = int(total)
@@ -145,7 +145,7 @@ def fetch_timeframe_history(symbol: str, timeframe: str, total: int = 1500) -> p
 
 def fetch_live_quote(symbol: str) -> dict:
     """Near-real-time public quote. Failure returns an error instead of fake values."""
-    url = "https://api.binance.com/api/v3/ticker/24hr"
+    url = "https://data-api.binance.vision/api/v3/ticker/24hr"
     r = requests.get(url, params={"symbol": symbol}, timeout=8)
     r.raise_for_status()
     d = r.json()

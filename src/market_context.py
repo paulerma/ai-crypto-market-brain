@@ -2,7 +2,7 @@
 import requests
 import numpy as np
 
-BINANCE="https://api.binance.com"
+BINANCE="https://data-api.binance.vision"
 FUTURES="https://fapi.binance.com"
 
 def market_breadth(timeout=10):
