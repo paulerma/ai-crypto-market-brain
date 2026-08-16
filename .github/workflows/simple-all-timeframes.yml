@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
-      - '.github/scripts/simplify_direction_signal.py'
+      - '.github/scripts/make_binary_direction.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Simplify signal to up down or no direction
-        run: python .github/scripts/simplify_direction_signal.py
+      - name: Make main signal binary up or down
+        run: python .github/scripts/make_binary_direction.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Simplify main signal to price direction"
+            git commit -m "Make simple signal primarily up or down"
             git push
           fi
