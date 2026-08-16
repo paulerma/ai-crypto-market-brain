@@ -4,8 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
-      - '.github/scripts/simplify_signal_first_ui.py'
-      - '.github/scripts/improve_next_move_signal.py'
+      - '.github/scripts/fix_fast_lateral_and_dot.py'
   workflow_dispatch:
 
 permissions:
@@ -20,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Improve next-move signal
-        run: python .github/scripts/improve_next_move_signal.py
+      - name: Fix fast lateral classification and dot placement
+        run: python .github/scripts/fix_fast_lateral_and_dot.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -34,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Refine immediate direction signal by timeframe"
+            git commit -m "Fix fast lateral classification and move signal dot"
             git push
           fi
