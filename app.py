@@ -883,7 +883,17 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         sigma = None
 
     atr_pct = float(row.get("atr_pct", 0.01))
-    flat_thr = float(np.clip(0.35 * max(atr_pct, 1e-6) * np.sqrt(max(1, int(horizon))), 0.004, 0.05))
+    flat_floor = {
+        "1m": 0.0004, "2m": 0.0005, "3m": 0.0006, "5m": 0.0008,
+        "10m": 0.0010, "15m": 0.0012, "30m": 0.0015, "45m": 0.0018,
+        "1h": 0.0020, "2h": 0.0025, "3h": 0.0030, "4h": 0.0035,
+        "1D": 0.0050, "1W": 0.0120, "1M": 0.0250,
+    }.get(timeframe, 0.0020)
+    flat_ceiling = max(flat_floor * 8.0, 0.012)
+    flat_thr = float(np.clip(
+        0.35 * max(atr_pct, 1e-6) * np.sqrt(max(1, int(horizon))),
+        flat_floor, flat_ceiling,
+    ))
     fwd = features["close"].shift(-int(horizon)) / features["close"] - 1.0
     analog = find_similar_cases(features, ANALOG_FEATURE_COLUMNS, fwd, int(horizon), k=50, flat_threshold=flat_thr)
     if analog is None or analog.n_cases < 20:
@@ -954,21 +964,21 @@ def fast_statistical_signal(closed: pd.DataFrame, timeframe: str, horizon: int, 
         cycle_context == dom if cycle_context else False,
     ])
 
-    # Very selective gate. If evidence disagrees, gray is preferable to a false color.
+    # SIMPLE mode must always answer the user's main question: what direction is
+    # currently most probable in the selected timeframe?  We therefore expose
+    # the dominant class even when evidence is weak, but we NEVER hide the
+    # uncertainty: strength is labelled BAJA / MEDIA / ALTA.
+    high = prob >= 0.60 and margin >= 0.16 and confirmations >= 3
     if dom in ("SUBIDA", "BAJADA"):
-        reliable = (analog_dom == dom and prob >= 0.47 and margin >= 0.075 and confirmations >= 2)
+        medium = prob >= 0.47 and margin >= 0.07 and confirmations >= 2
     else:
-        reliable = (analog_dom == "LATERAL" and tech == "LATERAL" and prob >= 0.44 and margin >= 0.055)
-
-    state = None
-    if reliable:
-        high = prob >= 0.60 and margin >= 0.16 and confirmations >= 3
-        state = {
-            "scenario": dom,
-            "probability": prob,
-            "reliability": "ALTA" if high else "MEDIA",
-            "source": "patrones históricos + tendencia + volumen + ciclo",
-        }
+        medium = prob >= 0.44 and margin >= 0.05 and confirmations >= 1
+    state = {
+        "scenario": dom,
+        "probability": prob,
+        "reliability": "ALTA" if high else "MEDIA" if medium else "BAJA",
+        "source": "patrones históricos + tendencia + momentum + volumen + ciclo",
+    }
 
     return {
         "ok": True,
@@ -1050,11 +1060,11 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
     if state:
         scenario = state["scenario"]
         if scenario == "SUBIDA":
-            dot_color, short_label = "#2ecc71", "LONG"
+            dot_color, short_label = "#2ecc71", "SUBE"
             if simple_forecast is not None:
                 zone, plan = simple_forecast.up, simple_forecast.long_plan
         elif scenario == "BAJADA":
-            dot_color, short_label = "#ff5c5c", "SHORT"
+            dot_color, short_label = "#ff5c5c", "BAJA"
             if simple_forecast is not None:
                 zone, plan = simple_forecast.down, simple_forecast.short_plan
         else:
@@ -1103,7 +1113,8 @@ def simple_signal_chart(df, symbol, timeframe, horizon, state, simple_forecast=N
     )
 
     # Discreet stop-loss / technical invalidation only for validated LONG/SHORT.
-    if state and state.get("scenario") in ("SUBIDA", "BAJADA") and plan is not None:
+    if (state and state.get("scenario") in ("SUBIDA", "BAJADA")
+            and state.get("reliability") in ("MEDIA", "ALTA") and plan is not None):
         try:
             stop = float(plan.stop)
             fig.add_hline(
@@ -1142,7 +1153,7 @@ def store_df(key, value):
 
 # ------------------------- Sidebar -------------------------
 st.markdown("## AI Crypto Market Brain <span style='font-size:.9rem;color:#7d8590'>PRO · Fase 3.8 TEMPORALIDADES CLARAS</span>", unsafe_allow_html=True)
-st.caption("Pantalla simple: qué es más probable, en qué VELA podría empezar el cambio, rango de precio y stop condicional. Los cálculos avanzados quedan detrás.")
+st.caption("Elige activo y temporalidad. El punto de color en la gráfica es la señal principal.")
 
 with st.sidebar:
     st.markdown("### 📌 MERCADO")
@@ -1168,19 +1179,34 @@ with st.sidebar:
         "1 semana": "1W",
         "1 mes": "1M",
     }
-    timeframe_label = st.selectbox(
-        "Temporalidad",
-        list(TIMEFRAME_UI.keys()),
-        index=list(TIMEFRAME_UI.keys()).index("1 hora"),
-        help="Temporalidades estándar: minutos, horas, día, semana y mes. La letra interna del código no se muestra para evitar confundir 'm' con metros.",
-    )
-    timeframe = TIMEFRAME_UI[timeframe_label]
-    chart_bars = st.select_slider("Velas en gráfico", options=VISIBLE_OPTIONS, value=200)
-
-    st.markdown("#### ¿Qué periodo quieres proyectar?")
-    horizon_name = st.selectbox("Periodo", list(HORIZONS.keys()), index=1, label_visibility="collapsed")
-    horizon = HORIZONS[horizon_name]
-    st.caption(f"{horizon_name}: aprox. {horizon_text(timeframe, horizon)}")
+    if ui_mode == "Sencillo":
+        # Exact TradingView-style codes.  Nothing else is required from the user.
+        _simple_tfs = list(TIMEFRAME_UI.values())
+        timeframe = st.selectbox(
+            "Temporalidad",
+            _simple_tfs,
+            index=_simple_tfs.index("1h"),
+            help="El punto de la gráfica indica el rumbo más probable para esta temporalidad.",
+        )
+        timeframe_label = next(k for k, v in TIMEFRAME_UI.items() if v == timeframe)
+        chart_bars = 180
+        horizon_name = "Automático"
+        # Four candles smooths 1m noise without making the user choose a period.
+        # 1m -> ~4 min, 1h -> ~4 h, 1D -> ~4 días, etc.
+        horizon = 4
+    else:
+        timeframe_label = st.selectbox(
+            "Temporalidad",
+            list(TIMEFRAME_UI.keys()),
+            index=list(TIMEFRAME_UI.keys()).index("1 hora"),
+            help="Temporalidad de TradingView usada por el análisis.",
+        )
+        timeframe = TIMEFRAME_UI[timeframe_label]
+        chart_bars = st.select_slider("Velas en gráfico", options=VISIBLE_OPTIONS, value=200)
+        st.markdown("#### Horizonte de proyección")
+        horizon_name = st.selectbox("Periodo", list(HORIZONS.keys()), index=1, label_visibility="collapsed")
+        horizon = HORIZONS[horizon_name]
+        st.caption(f"{horizon_name}: aprox. {horizon_text(timeframe, horizon)}")
 
     if ui_mode == "Avanzado":
         with st.expander("📈 Indicadores del gráfico", expanded=False):
@@ -1269,10 +1295,12 @@ if ui_mode == "Sencillo":
         if simple_state:
             sc = simple_state["scenario"]
             icon = "🟢" if sc == "SUBIDA" else "🔴" if sc == "BAJADA" else "🟡"
-            label = "LONG" if sc == "SUBIDA" else "SHORT" if sc == "BAJADA" else "LATERAL"
+            label = "SUBE" if sc == "SUBIDA" else "BAJA" if sc == "BAJADA" else "LATERAL"
+            strength = simple_state.get("reliability", "BAJA").lower()
             st.markdown(f"### {icon} {selected} · {label} · {simple_state['probability']*100:.1f}% · {timeframe}")
+            st.caption(f"Evidencia {strength} · el color muestra el rumbo más probable, no una certeza.")
         else:
-            st.markdown(f"### ⚪ {selected} · SIN SEÑAL FIABLE · {timeframe}")
+            st.markdown(f"### ⚪ {selected} · DATOS INSUFICIENTES · {timeframe}")
 
         fig_fast = simple_signal_chart(
             chart_simple, selected, timeframe, int(horizon), simple_state, simple_forecast_fast
@@ -1284,13 +1312,13 @@ if ui_mode == "Sencillo":
         alert_key = f"fast_last_state::{selected}::{timeframe}"
         previous_state = st.session_state.get(alert_key)
         if previous_state is not None and previous_state != current_state:
-            txt = ("LONG" if current_state == "SUBIDA" else
-                   "SHORT" if current_state == "BAJADA" else
+            txt = ("SUBE" if current_state == "SUBIDA" else
+                   "BAJA" if current_state == "BAJADA" else
                    "LATERAL" if current_state == "LATERAL" else "SIN SEÑAL FIABLE")
             st.toast(f"{selected} · {timeframe}: {txt}", icon="🔔")
         st.session_state[alert_key] = current_state
 
-        st.caption("Análisis rápido: patrones históricos + tendencia + volumen + contexto de ciclo. El ML pesado queda en Avanzado.")
+        st.caption("🟢 sube · 🔴 baja · 🟡 lateral. El resto del análisis trabaja por detrás.")
 
     _render_fast_simple_mode()
     st.stop()
