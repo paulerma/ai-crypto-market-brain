@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/simple-all-timeframes.yml'
-      - '.github/scripts/fix_countdown_point_and_confidence.py'
+      - '.github/scripts/simplify_direction_signal.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore point, add countdown and audit confidence
-        run: python .github/scripts/fix_countdown_point_and_confidence.py
+      - name: Simplify signal to up down or no direction
+        run: python .github/scripts/simplify_direction_signal.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Restore prediction point and add candle countdown audit"
+            git commit -m "Simplify main signal to price direction"
             git push
           fi
