@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/simplify_up_down_ui.py'
+      - '.github/scripts/clean_simple_chart_labels.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Simplify up down timing UI
-        run: python .github/scripts/simplify_up_down_ui.py
+      - name: Clean simple chart labels
+        run: python .github/scripts/clean_simple_chart_labels.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Simplify view to up and down timing"
+            git commit -m "Keep simple view focused on up and down timing"
             git push
           fi
