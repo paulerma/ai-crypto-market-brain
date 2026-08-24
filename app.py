@@ -1334,7 +1334,7 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
     horizons of the selected timeframe, and lower-timeframe leading sensors.
     """
     current = current_trend_state(closed, timeframe)
-    horizons = [1, 2, 4]
+    horizons = [1, 2, 3, 4] if timeframe in ("1D", "1W", "1M") else [1, 2, 4]
     future = []
     raw_results = []
     for h in horizons:
@@ -1571,6 +1571,73 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
         fc["target_source"] = target_source
         directional_forecasts[row["to"]] = fc
 
+    # Estimate when each directional phase STARTS.  This is intentionally
+    # separate from timing_bars/target_price, which describe the horizon where
+    # that move is expected to be most developed.  We look for the earliest
+    # horizon where UP or DOWN gains a directional majority and use lower-TF
+    # sensors/precursors to flag a turn already forming before the main bar flips.
+    direction_onsets = {}
+    for direction in ("SUBIDA", "BAJADA"):
+        fc = directional_forecasts.get(direction) or {}
+        if not fc.get("has_window"):
+            continue
+        target_h = max(1, int(fc.get("timing_bars", 1)))
+        directional_supports = []
+        for h, res in zip(horizons, raw_results):
+            if not res.get("ok"):
+                continue
+            up_raw = float(res.get("pup", 0.0))
+            down_raw = float(res.get("pdown", 0.0))
+            total = up_raw + down_raw
+            if total <= 1e-9:
+                support = 0.5
+            elif direction == "SUBIDA":
+                support = up_raw / total
+            else:
+                support = down_raw / total
+            directional_supports.append((int(h), float(support)))
+
+        row = next((r for r in candidate_rows if r.get("to") == direction), {})
+        precursor = float(row.get("precursor", 0.5))
+        sensor_support = float(row.get("sensor_support", 0.5))
+        sensor_matches = 0
+        for snap in sensors:
+            tr_s = (snap.get("trend") or {}).get("scenario")
+            fc_s = (snap.get("forecast") or {}).get("scenario")
+            if tr_s == direction or fc_s == direction:
+                sensor_matches += 1
+
+        if current_dir == direction:
+            onset = {
+                "status": "YA_EN_CURSO",
+                "start_bars": 0, "end_bars": 0,
+                "evidence": float(max(sensor_support, precursor)),
+            }
+        else:
+            qualifying = [(h, sc) for h, sc in directional_supports if sc >= 0.52 and h <= target_h]
+            if qualifying:
+                first_h = min(h for h, _ in qualifying)
+            else:
+                first_h = target_h
+            previous = [int(h) for h in horizons if int(h) < first_h]
+            prev_h = max(previous) if previous else 0
+
+            # If lower timeframes already point in this direction, surface the
+            # move as forming NOW; the main timeframe may still look unchanged.
+            if sensor_matches >= 2 or (sensor_matches >= 1 and precursor >= 0.60 and sensor_support >= 0.56):
+                onset = {
+                    "status": "EN_FORMACION",
+                    "start_bars": 0, "end_bars": max(1, min(first_h, 1)),
+                    "evidence": float(max(sensor_support, precursor)),
+                }
+            else:
+                onset = {
+                    "status": "VENTANA",
+                    "start_bars": int(prev_h), "end_bars": int(first_h),
+                    "evidence": float(max([sc for h, sc in directional_supports if h == first_h] or [0.5])),
+                }
+        direction_onsets[direction] = onset
+
     # Explain the gap between now and the first directional timing. The immediate
     # horizon determines whether price is more likely to range or keep a bias.
     valid_timing = [int(r.get("timing_bars", 1)) for r in candidate_rows if r.get("timing_ok")]
@@ -1690,6 +1757,7 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
         "sensors": sensors,
         "candidate_rows": candidate_rows,
         "directional_forecasts": directional_forecasts,
+        "direction_onsets": direction_onsets,
         "primary_forecast": primary_forecast,
         "interim": interim,
         "max_horizon": 8,
@@ -2265,20 +2333,61 @@ if ui_mode == "Sencillo":
             return _duration_text(timeframe, bars)
 
         interim = trend_info.get("interim") or {}
+        onsets = trend_info.get("direction_onsets") or {}
         spot_ref = float(closed_simple["close"].iloc[-1])
-        interim_label = str(interim.get("label", "LATERALIZA"))
+
+        def _compact_interval(start_bars: int, end_bars: int) -> str:
+            start_bars, end_bars = int(start_bars), int(end_bars)
+            if start_bars <= 0 and end_bars <= 0:
+                return "ahora"
+            if start_bars <= 0:
+                return f"dentro de {_duration_text(timeframe, max(1, end_bars))}"
+            a = _duration_text(timeframe, start_bars)
+            b = _duration_text(timeframe, max(start_bars, end_bars))
+            if a == b:
+                return a
+            ap, bp = a.split(" ", 1), b.split(" ", 1)
+            if len(ap) == 2 and len(bp) == 2 and ap[1] == bp[1]:
+                return f"entre {ap[0]} y {bp[0]} {ap[1]}"
+            return f"entre {a} y {b}"
+
         if interim.get("is_lateral"):
             i_low = _market_price_text(interim.get("range_low"), spot_ref)
             i_high = _market_price_text(interim.get("range_high"), spot_ref)
             until_txt = _duration_text(timeframe, int(interim.get("until_bars", 1)))
-            st.markdown(f"## 🟡 MIENTRAS: {interim_label} · {i_low}–{i_high} · aprox. {until_txt}")
-        else:
-            st.markdown(f"## 🟡 MIENTRAS: {interim_label}")
+            st.markdown(f"## 🟡 AHORA: LATERALIZA · {i_low}–{i_high} · aprox. {until_txt}")
 
-        up_target = _market_price_text(up_fc.get("target_price") if up_fc else None, spot_ref)
-        down_target = _market_price_text(down_fc.get("target_price") if down_fc else None, spot_ref)
-        st.markdown(f"## 🟢 SUBE EN: {_compact_timing(up_fc)} · HASTA APROX.: {up_target}")
-        st.markdown(f"## 🔴 BAJA EN: {_compact_timing(down_fc)} · HASTA APROX.: {down_target}")
+        sequence = []
+        for direction, fc in (("SUBIDA", up_fc), ("BAJADA", down_fc)):
+            if not fc or not fc.get("has_window"):
+                continue
+            onset = onsets.get(direction) or {}
+            status = onset.get("status", "VENTANA")
+            start_b = int(onset.get("start_bars", 0))
+            end_b = int(onset.get("end_bars", max(1, int(fc.get("timing_bars", 1)))))
+            if status == "YA_EN_CURSO":
+                onset_text = "YA ESTÁ EN CURSO"
+                order_key = -1.0
+            elif status == "EN_FORMACION":
+                onset_text = "EN FORMACIÓN AHORA"
+                order_key = 0.0
+            else:
+                onset_text = _compact_interval(start_b, end_b)
+                order_key = float(end_b)
+            target_bars = int(fc.get("timing_bars", fc.get("start_bars", 1)))
+            target_time = _duration_text(timeframe, target_bars)
+            target_price = _market_price_text(fc.get("target_price"), spot_ref)
+            sequence.append((order_key, target_bars, direction, onset_text, target_time, target_price))
+
+        sequence.sort(key=lambda x: (x[0], x[1]))
+        for idx, (_, _, direction, onset_text, target_time, target_price) in enumerate(sequence):
+            icon = "🟢" if direction == "SUBIDA" else "🔴"
+            verb = "SUBIR" if direction == "SUBIDA" else "BAJAR"
+            prefix = "DESPUÉS · " if idx > 0 else ""
+            st.markdown(
+                f"## {icon} {prefix}EMPIEZA A {verb}: {onset_text} · "
+                f"OBJETIVO A {target_time}: {target_price}"
+            )
 
         fig_fast = trend_chart(chart_simple, selected, timeframe, trend_info)
         st.plotly_chart(fig_fast, width="stretch", theme=None,
