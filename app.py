@@ -1664,40 +1664,6 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
         borderwidth=1, borderpad=4,
     )
 
-    primary_dir = primary.get("direction")
-    primary_conf = float(primary.get("confidence", 0.5))
-    primary_color = "#2ecc71" if primary_dir == "SUBIDA" else "#ff5c5c" if primary_dir == "BAJADA" else "#f2c94c"
-    primary_label = "SUBIDA" if primary_dir == "SUBIDA" else "BAJADA" if primary_dir == "BAJADA" else "SIN VENTAJA"
-    primary_window = primary.get("window")
-    if primary_window:
-        primary_when = transition_window_text(timeframe, primary_window, int(trend_info.get("max_horizon", 8)))
-    else:
-        primary_when = "sin ventana fiable todavía"
-
-    fig.add_annotation(x=1.074, y=0.73, xref="paper", yref="paper",
-                       text=(f"<b>RUMBO MÁS PROBABLE</b><br>"
-                             f"<span style='font-size:17px'><b>{primary_label}</b></span><br>"
-                             f"{primary_conf*100:.0f}% · {primary_when}"),
-                       showarrow=False, xanchor="left", align="left",
-                       font={"color": primary_color, "size": 13},
-                       bgcolor="rgba(8,11,15,.94)", bordercolor=primary_color,
-                       borderwidth=1, borderpad=6)
-
-    fig.add_shape(type="circle", xref="paper", yref="paper",
-                  x0=1.018, x1=1.058, y0=0.58, y1=0.64,
-                  fillcolor=cur_color, line={"color": "#ffffff", "width": 2})
-    fig.add_annotation(x=1.074, y=0.61, xref="paper", yref="paper",
-                       text=f"<b>TENDENCIA AHORA: {cur_label}</b>", showarrow=False,
-                       xanchor="left", font={"color": cur_color, "size": 13})
-    fig.add_annotation(x=1.074, y=0.50, xref="paper", yref="paper",
-                       text=f"<b>🟢 {up_text}</b>", showarrow=False,
-                       xanchor="left", align="left",
-                       font={"color": "#2ecc71", "size": 11})
-    fig.add_annotation(x=1.074, y=0.42, xref="paper", yref="paper",
-                       text=f"<b>🔴 {down_text}</b>", showarrow=False,
-                       xanchor="left", align="left",
-                       font={"color": "#ff5c5c", "size": 11})
-
     if timeframe in ("1m", "2m", "3m", "5m", "10m", "15m"):
         tick_fmt, hover_fmt = "%H:%M", "%d %b %Y · %H:%M"
     elif timeframe in ("30m", "45m", "1h", "2h", "3h", "4h"):
