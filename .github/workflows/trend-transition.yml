@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/remove_chart_side_predictions.py'
+      - '.github/scripts/market_timing_best_estimate.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Remove chart side predictions
-        run: python .github/scripts/remove_chart_side_predictions.py
+      - name: Apply market timing estimator
+        run: python .github/scripts/market_timing_best_estimate.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Remove confusing chart side predictions"
+            git commit -m "Estimate up and down timing from market analysis"
             git push
           fi
