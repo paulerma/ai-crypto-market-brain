@@ -2099,70 +2099,25 @@ if ui_mode == "Sencillo":
         tr = trend_info.get("transition")
         early = trend_info.get("early_warning")
         active = tr or early
-        primary = trend_info.get("primary_forecast") or {}
-        primary_dir = primary.get("direction")
-        primary_conf = float(primary.get("confidence", 0.5))
-        primary_adv = float(primary.get("advantage", 0.0))
-        primary_window = primary.get("window")
-
-        if primary_dir in ("SUBIDA", "BAJADA"):
-            primary_icon = "🟢" if primary_dir == "SUBIDA" else "🔴"
-            primary_word = "SUBIDA" if primary_dir == "SUBIDA" else "BAJADA"
-            if primary_window:
-                primary_when = transition_window_text(timeframe, primary_window, int(trend_info.get("max_horizon", 8)))
-            else:
-                primary_when = "sin ventana fiable todavía"
-            if primary_conf >= 0.62:
-                primary_grade = "ventaja clara"
-            elif primary_conf >= 0.56:
-                primary_grade = "ventaja moderada"
-            else:
-                primary_grade = "ventaja leve"
-            st.markdown(f"## {primary_icon} RUMBO MÁS PROBABLE: {primary_word}")
-            st.markdown(f"### Inicio estimado: {primary_when}")
-            st.caption(
-                f"Confianza direccional {primary_conf*100:.0f}% · {primary_grade}. "
-                f"La IA compara directamente evidencia de subida vs bajada; no es una garantía."
-            )
-        else:
-            st.markdown("## 🟡 RUMBO MÁS PROBABLE: SIN VENTAJA CLARA")
-
-        st.markdown(f"### {cur_icon} Tendencia actual: {cur_label} · {timeframe}")
-
-        # ALWAYS show both directional windows. These are computed from the same
-        # AI evidence, so displaying both does not add another heavy model pass.
         dirs = trend_info.get("directional_forecasts", {})
         up_fc = dirs.get("SUBIDA")
         down_fc = dirs.get("BAJADA")
 
-        def _render_direction_forecast(fc, direction):
-            icon = "🟢" if direction == "SUBIDA" else "🔴"
-            title = "PRÓXIMA SUBIDA" if direction == "SUBIDA" else "PRÓXIMA BAJADA"
-            if not fc:
-                st.markdown(f"### {icon} {title} · sin cálculo disponible")
-                return
-            prob = float(fc.get("probability", 0.5)) * 100.0
-            status = fc.get("status", "SIN_VENTANA_FIABLE")
-            if fc.get("has_window"):
-                window = transition_window_text(timeframe, fc, int(trend_info.get("max_horizon", 8)))
-                qualifier = "PROBABLE" if status == "PROBABLE" else "POSIBLE EN FORMACIÓN"
-                st.markdown(f"### {icon} {title} {qualifier} · {window}")
-                st.caption(f"Confianza IA {prob:.0f}% · evidencia {str(fc.get('reliability','BAJA')).lower()}.")
-            else:
-                st.markdown(f"### {icon} {title} · sin ventana fiable todavía")
-                st.caption(f"Evidencia actual {prob:.0f}% · todavía no alcanza el umbral para estimar cuándo comenzaría.")
+        def _compact_timing(fc):
+            if not fc or not fc.get("has_window"):
+                return "SIN SEÑAL CLARA"
+            a = _duration_text(timeframe, int(fc.get("start_bars", 1)))
+            b = _duration_text(timeframe, int(fc.get("end_bars", fc.get("start_bars", 1))))
+            if a == b:
+                return a
+            ap = a.split(" ", 1)
+            bp = b.split(" ", 1)
+            if len(ap) == 2 and len(bp) == 2 and ap[1] == bp[1]:
+                return f"{ap[0]}–{bp[0]} {ap[1]}"
+            return f"{a}–{b}"
 
-        _render_direction_forecast(up_fc, "SUBIDA")
-        _render_direction_forecast(down_fc, "BAJADA")
-
-        if tr:
-            move = "subida" if tr["to"] == "SUBIDA" else "bajada"
-            st.caption(f"⚡ Giro principal detectado: probable {move} {transition_window_text(timeframe, tr, int(trend_info.get('max_horizon', 8)))}.")
-        elif early:
-            move = "subida" if early["to"] == "SUBIDA" else "bajada"
-            st.caption(f"🟠 Giro temprano en formación: posible {move} {transition_window_text(timeframe, early, int(trend_info.get('max_horizon', 8)))}.")
-        else:
-            st.caption("Sin giro temprano dominante todavía; las dos direcciones siguen visibles arriba con su evidencia actual.")
+        st.markdown(f"## 🟢 SUBE EN: {_compact_timing(up_fc)}")
+        st.markdown(f"## 🔴 BAJA EN: {_compact_timing(down_fc)}")
 
         fig_fast = trend_chart(chart_simple, selected, timeframe, trend_info)
         st.plotly_chart(fig_fast, width="stretch", theme=None,
