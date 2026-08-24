@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/add_trend_transition_detector.py'
+      - '.github/scripts/hotfix_transition_startup.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply trend transition detector
-        run: python .github/scripts/add_trend_transition_detector.py
+      - name: Apply startup hotfix
+        run: python .github/scripts/hotfix_transition_startup.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Detect trend changes by selected timeframe"
+            git commit -m "Lighten early trend detector startup"
             git push
           fi
