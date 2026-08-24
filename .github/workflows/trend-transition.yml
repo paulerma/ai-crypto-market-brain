@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/hotfix_transition_startup.py'
+      - '.github/scripts/show_both_direction_windows.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply startup hotfix
-        run: python .github/scripts/hotfix_transition_startup.py
+      - name: Show both direction windows
+        run: python .github/scripts/show_both_direction_windows.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Lighten early trend detector startup"
+            git commit -m "Show probable up and down timing windows"
             git push
           fi
