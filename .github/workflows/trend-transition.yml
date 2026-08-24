@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/tradingview_price_scale.py'
+      - '.github/scripts/add_primary_direction_signal.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply TradingView price scale
-        run: python .github/scripts/tradingview_price_scale.py
+      - name: Add primary AI direction signal
+        run: python .github/scripts/add_primary_direction_signal.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Improve chart price scale like TradingView"
+            git commit -m "Show one clear most probable market direction"
             git push
           fi
