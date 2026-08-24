@@ -1223,9 +1223,9 @@ LEADING_TIMEFRAMES = {
 def leading_sensor_state(symbol_code: str, sensor_tf: str, cycle_context: str | None) -> dict | None:
     """Use a lower timeframe as an early sensor without rerunning the heavy ML stack."""
     try:
-        hist = min(int(DEFAULT_HISTORY.get(sensor_tf, 600)), 700)
+        hist = min(int(DEFAULT_HISTORY.get(sensor_tf, 320)), 320)
         base = fetch_timeframe_history(symbol_code, sensor_tf, hist + 2)
-        recent = fetch_recent_timeframe_history(symbol_code, sensor_tf, 36)
+        recent = fetch_recent_timeframe_history(symbol_code, sensor_tf, 24)
         full = (pd.concat([base, recent], ignore_index=True)
                 .sort_values("timestamp")
                 .drop_duplicates("timestamp", keep="last")
@@ -1235,14 +1235,21 @@ def leading_sensor_state(symbol_code: str, sensor_tf: str, cycle_context: str | 
         if len(closed) < 60:
             return None
         trend = current_trend_state(closed, sensor_tf)
-        fast = fast_statistical_signal(closed, sensor_tf, 1, cycle_context)
-        state = fast.get("state") if fast.get("ok") else None
+        # Lightweight directional sensor. The expensive historical analogue
+        # engine remains on the selected/main timeframe only.
+        scenario = trend.get("scenario", "LATERAL")
+        strength = float(trend.get("strength", 0.0))
+        state = {
+            "scenario": scenario,
+            "probability": float(0.50 + 0.40 * min(1.0, strength)) if scenario in ("SUBIDA", "BAJADA") else 0.50,
+            "reliability": "MEDIA" if strength >= 0.50 else "BAJA",
+        }
         return {
             "timeframe": sensor_tf,
             "trend": trend,
             "forecast": state,
-            "impulse": fast.get("impulse") if fast.get("ok") else None,
-            "volume": fast.get("volume_direction") if fast.get("ok") else None,
+            "impulse": None,
+            "volume": None,
         }
     except Exception:
         return None
@@ -1304,7 +1311,7 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
     horizons of the selected timeframe, and lower-timeframe leading sensors.
     """
     current = current_trend_state(closed, timeframe)
-    horizons = [1, 2, 4, 8]
+    horizons = [1, 2, 4]
     future = []
     raw_results = []
     for h in horizons:
@@ -1443,7 +1450,7 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
         "future": future,
         "sensors": sensors,
         "candidate_rows": candidate_rows,
-        "max_horizon": horizons[-1],
+        "max_horizon": 8,
     }
 
 
@@ -1853,7 +1860,7 @@ if ui_mode == "Sencillo":
 
     @st.fragment(run_every=_simple_refresh)
     def _render_fast_simple_mode():
-        fast_history = min(int(training_bars), 1200)
+        fast_history = min(int(training_bars), 800)
         need_simple = max(fast_history + 2, int(chart_bars) + 2)
         try:
             base_simple = fetch_timeframe_history(SYMBOLS[selected], timeframe, need_simple)
@@ -1877,7 +1884,21 @@ if ui_mode == "Sencillo":
             return
 
         cycle = fast_cycle_context(SYMBOLS[selected])
-        trend_info = trend_transition_forecast(SYMBOLS[selected], closed_simple, timeframe, cycle)
+        try:
+            trend_info = trend_transition_forecast(SYMBOLS[selected], closed_simple, timeframe, cycle)
+        except Exception as e:
+            # Availability first: if the early-warning layer has a runtime issue,
+            # render the current trend instead of taking down the whole app.
+            trend_info = {
+                "current": current_trend_state(closed_simple, timeframe),
+                "transition": None,
+                "early_warning": None,
+                "future": [],
+                "sensors": [],
+                "candidate_rows": [],
+                "max_horizon": 8,
+            }
+            st.caption(f"Detector temprano temporalmente limitado: {type(e).__name__}.")
         current = trend_info.get("current", {})
         cur = current.get("scenario", "LATERAL")
         cur_icon = "🟢" if cur == "SUBIDA" else "🔴" if cur == "BAJADA" else "🟡"
