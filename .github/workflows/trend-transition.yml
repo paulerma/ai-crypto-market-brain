@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/show_both_direction_windows.py'
+      - '.github/scripts/add_up_down_timing_points.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show both direction windows
-        run: python .github/scripts/show_both_direction_windows.py
+      - name: Add green and red timing points
+        run: python .github/scripts/add_up_down_timing_points.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show probable up and down timing windows"
+            git commit -m "Add probable up and down timing points"
             git push
           fi
