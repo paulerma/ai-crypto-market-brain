@@ -1711,7 +1711,7 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
 
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="#080b0f", plot_bgcolor="#080b0f",
-        height=650, margin=dict(l=8, r=300, t=36, b=48),
+        height=650, margin=dict(l=8, r=80, t=36, b=48),
         xaxis_rangeslider_visible=False, hovermode="x unified", dragmode="pan",
         showlegend=False, uirevision=f"trend-{symbol}-{timeframe}",
     )
@@ -2139,10 +2139,6 @@ if ui_mode == "Sencillo":
             st.toast(f"{prefix} {direction.lower()} · {transition_window_text(timeframe, active, trend_info.get('max_horizon',8))}", icon="🔔")
         st.session_state[watch_key] = watch_now
 
-        sensor_tfs = [x.get("timeframe") for x in trend_info.get("sensors", []) if x.get("timeframe")]
-        if sensor_tfs:
-            st.caption(f"Sensores adelantados usados: {', '.join(sensor_tfs)} · temporalidad principal: {timeframe}.")
-        st.caption("La meta es detectar debilitamiento y giro antes de que la tendencia principal ya haya cambiado. No garantiza anticipar todos los giros.")
 
     _render_fast_simple_mode()
     st.stop()
