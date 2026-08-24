@@ -1500,10 +1500,40 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
     plot_df = df.copy()
     plot_ts = pd.to_datetime(plot_df["timestamp"], utc=True)
     plot_df["timestamp"] = plot_ts.dt.tz_convert(CHART_TZ).dt.tz_localize(None)
+
+    # TradingView-like price precision: large assets use 2 decimals while
+    # lower-priced coins keep enough decimals to avoid misleading rounding.
+    last_price = float(plot_df["close"].iloc[-1])
+    last_open = float(plot_df["open"].iloc[-1])
+    abs_price = abs(last_price)
+    if abs_price >= 100:
+        price_decimals = 2
+    elif abs_price >= 1:
+        price_decimals = 4
+    elif abs_price >= 0.01:
+        price_decimals = 5
+    else:
+        price_decimals = 8
+    price_tickformat = f",.{price_decimals}f"
+    price_text = f"{last_price:,.{price_decimals}f}"
+    current_price_color = "#2ecc71" if last_price >= last_open else "#ff5c5c"
+
+    ohlc_hover = [
+        (f"{pd.Timestamp(t).strftime('%d %b %Y · %H:%M')}"
+         f"<br>O {float(o):,.{price_decimals}f}"
+         f" · H {float(h):,.{price_decimals}f}"
+         f" · L {float(l):,.{price_decimals}f}"
+         f" · C {float(c):,.{price_decimals}f}")
+        for t, o, h, l, c in zip(
+            plot_df["timestamp"], plot_df["open"], plot_df["high"], plot_df["low"], plot_df["close"]
+        )
+    ]
+
     fig.add_trace(go.Candlestick(
         x=plot_df.timestamp,
         open=plot_df.open, high=plot_df.high, low=plot_df.low, close=plot_df.close,
         name="Precio", increasing_line_color="#2ecc71", decreasing_line_color="#ff5c5c",
+        hovertext=ohlc_hover, hoverinfo="text",
     ))
 
     current = trend_info.get("current", {})
@@ -1589,6 +1619,23 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
     except Exception:
         pass
 
+    # Current-price line and right-axis label, similar to TradingView.
+    # This is descriptive live-chart context, not a forecast marker.
+    fig.add_shape(
+        type="line", xref="paper", yref="y",
+        x0=0.0, x1=1.0, y0=last_price, y1=last_price,
+        line={"color": current_price_color, "width": 1, "dash": "dot"},
+        layer="above",
+    )
+    fig.add_annotation(
+        x=1.004, y=last_price, xref="paper", yref="y",
+        text=f"<b>{price_text}</b>", showarrow=False,
+        xanchor="left", yanchor="middle",
+        font={"color": "#ffffff", "size": 11},
+        bgcolor=current_price_color, bordercolor=current_price_color,
+        borderwidth=1, borderpad=4,
+    )
+
     fig.add_shape(type="circle", xref="paper", yref="paper",
                   x0=1.018, x1=1.058, y0=0.61, y1=0.67,
                   fillcolor=cur_color, line={"color": "#ffffff", "width": 2})
@@ -1628,7 +1675,14 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
         tickcolor="#65707c", tickfont={"size": 11, "color": "#aab4bf"},
         nticks=13, automargin=True,
     )
-    fig.update_yaxes(gridcolor="#171d24", fixedrange=False, side="right")
+    fig.update_yaxes(
+        gridcolor="#171d24", fixedrange=False, side="right",
+        tickformat=price_tickformat, hoverformat=price_tickformat,
+        separatethousands=True, showexponent="none", exponentformat="none",
+        ticks="outside", ticklen=5, tickcolor="#65707c",
+        tickfont={"size": 11, "color": "#c7d0d9"},
+        automargin=True,
+    )
     return fig
 
 
