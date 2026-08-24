@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/add_primary_direction_signal.py'
+      - '.github/scripts/simplify_up_down_ui.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add primary AI direction signal
-        run: python .github/scripts/add_primary_direction_signal.py
+      - name: Simplify up down timing UI
+        run: python .github/scripts/simplify_up_down_ui.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show one clear most probable market direction"
+            git commit -m "Simplify view to up and down timing"
             git push
           fi
