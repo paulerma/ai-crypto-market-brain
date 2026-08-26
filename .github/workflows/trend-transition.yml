@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/add_ordered_market_path.py'
+      - '.github/scripts/single_active_signal_dot.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add ordered market path
-        run: python .github/scripts/add_ordered_market_path.py
+      - name: Apply single active signal dot
+        run: python .github/scripts/single_active_signal_dot.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show ordered market path with move onset and targets"
+            git commit -m "Show one active green or red chart signal"
             git push
           fi
