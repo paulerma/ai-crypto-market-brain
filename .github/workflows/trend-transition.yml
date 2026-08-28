@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/show_active_target_line.py'
+      - '.github/scripts/show_both_price_targets.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show active target line
-        run: python .github/scripts/show_active_target_line.py
+      - name: Show both price targets
+        run: python .github/scripts/show_both_price_targets.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show active target line and price"
+            git commit -m "Always show both directional price targets"
             git push
           fi
