@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/show_target_eta.py'
+      - '.github/scripts/safety_gate_predictive_signals.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Show target ETA
-        run: python .github/scripts/show_target_eta.py
+      - name: Apply predictive signal safety gate
+        run: python .github/scripts/safety_gate_predictive_signals.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show ETA for both price targets"
+            git commit -m "Gate predictive signals and correct horizon labels"
             git push
           fi
