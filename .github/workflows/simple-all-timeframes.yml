@@ -1,10 +1,6 @@
 name: Simple all-timeframes market view
 
 on:
-  push:
-    paths:
-      - '.github/workflows/simple-all-timeframes.yml'
-      - '.github/scripts/make_binary_direction.py'
   workflow_dispatch:
 
 permissions:
