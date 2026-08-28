@@ -94,8 +94,7 @@ insert_block = '''    # Build ONE chronological market path from the actual domi
     }
 
 '''
-if "    market_path = {
-        "rows": path_rows," not in s:
+if "Build ONE chronological market path" not in s:
     if insert_anchor not in s:
         raise RuntimeError("No se encontro ancla para market_path")
     s = s.replace(insert_anchor, insert_block + insert_anchor, 1)
