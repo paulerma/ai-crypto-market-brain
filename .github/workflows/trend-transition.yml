@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/single_active_signal_dot.py'
+      - '.github/scripts/fix_ordered_horizon_strategy.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply single active signal dot
-        run: python .github/scripts/single_active_signal_dot.py
+      - name: Fix ordered horizon strategy
+        run: python .github/scripts/fix_ordered_horizon_strategy.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show one active green or red chart signal"
+            git commit -m "Fix stale targets and false sequential reversals"
             git push
           fi
