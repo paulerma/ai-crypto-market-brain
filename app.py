@@ -22,7 +22,15 @@ from models import fit_model, prepare_training_frame
 from calibration import calibrate
 from engines.regime_engine import classify_regime
 from engines.decision_engine import decide, build_entry_setup, build_risk_plan, confluence_analysis
-from engines.pattern_engine import find_similar_cases, estimate_time_to_move, ANALOG_FEATURE_COLUMNS
+from engines.pattern_engine import find_similar_cases, ANALOG_FEATURE_COLUMNS
+try:
+    from engines.pattern_engine import estimate_time_to_move
+except ImportError:
+    # Deployment-safe fallback: an older Streamlit worker may briefly load
+    # pattern_engine.py before this helper exists. ETA is optional; the app must
+    # still start and simply omit ETA until the module refreshes.
+    def estimate_time_to_move(*args, **kwargs):
+        return None
 from market_context import market_breadth, fear_greed, derivatives
 from projections import volatility_projection
 from simple_forecast import build_simple_forecast
