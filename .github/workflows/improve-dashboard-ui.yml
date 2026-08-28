@@ -2,9 +2,6 @@ name: Improve dashboard UI
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/improve-dashboard-ui.yml'
 
 permissions:
   contents: write
