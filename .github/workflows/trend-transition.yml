@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/add_target_to_active_signal.py'
+      - '.github/scripts/show_active_target_line.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add target to active signal
-        run: python .github/scripts/add_target_to_active_signal.py
+      - name: Show active target line
+        run: python .github/scripts/show_active_target_line.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Show target price on active chart signal"
+            git commit -m "Show active target line and price"
             git push
           fi
