@@ -145,3 +145,129 @@ def find_similar_cases(features: pd.DataFrame, feature_columns: list[str] | None
         q90_forward_return=float(q[4]),
         scenario_quantiles=scenarios,
     )
+
+
+def estimate_time_to_move(features: pd.DataFrame, market: pd.DataFrame,
+                          feature_columns: list[str] | None,
+                          target_return: float, direction: str,
+                          max_bars: int = 8, k: int = 40) -> dict | None:
+    """Estimate first-touch time from historical states similar to the current one.
+
+    This is a true time-to-touch calculation, not a forecast-horizon alias.
+    Historical neighbors are chosen using information available at each state;
+    their subsequent OHLC path is then scanned for the first bar that touched
+    a move of the same percentage magnitude as the current target.
+
+    Returns hit-rate and time quantiles only when enough comparable histories
+    are available. Recent rows without a complete future path are excluded.
+    """
+    if features is None or market is None or features.empty or market.empty:
+        return None
+    if direction not in ("SUBIDA", "BAJADA"):
+        return None
+    try:
+        move = abs(float(target_return))
+    except Exception:
+        return None
+    if not np.isfinite(move) or move <= 0:
+        return None
+    max_bars = max(1, int(max_bars))
+
+    n = min(len(features), len(market))
+    if n < max(80, max_bars + 40):
+        return None
+    features = features.iloc[:n]
+    market = market.iloc[:n]
+
+    cols = [c for c in (feature_columns or ANALOG_FEATURE_COLUMNS) if c in features.columns]
+    if not cols:
+        return None
+
+    # Historical states must have a fully observed path of max_bars afterwards.
+    hist_end = n - max_bars
+    history = features.iloc[:hist_end][cols].copy()
+    min_non_na = max(5, int(len(cols) * 0.70))
+    history = history[history.notna().sum(axis=1) >= min_non_na]
+    cols = [c for c in cols if history[c].notna().any()]
+    if len(history) < 30 or not cols:
+        return None
+
+    current = features.iloc[[-1]][cols].copy()
+    if current.notna().sum(axis=1).iloc[0] < max(5, int(len(cols) * 0.70)):
+        return None
+
+    imp = SimpleImputer(strategy="median")
+    scaler = StandardScaler()
+    X_hist = scaler.fit_transform(imp.fit_transform(history[cols]))
+    X_current = scaler.transform(imp.transform(current[cols]))
+
+    kk = min(int(k), len(history))
+    pool = min(len(history), max(kk, kk * 5))
+    nn = NearestNeighbors(n_neighbors=pool, metric="euclidean")
+    nn.fit(X_hist)
+    _, idx = nn.kneighbors(X_current)
+
+    original_idx = np.asarray(history.index, dtype=int)
+    spacing = max(1, min(max_bars // 2, 20))
+    chosen_orig = []
+    for pos in idx[0]:
+        oi = int(original_idx[pos])
+        if oi + max_bars >= n:
+            continue
+        if all(abs(oi - prev) > spacing for prev in chosen_orig):
+            chosen_orig.append(oi)
+        if len(chosen_orig) >= kk:
+            break
+    if len(chosen_orig) < 12:
+        return None
+
+    hit_times = []
+    for oi in chosen_orig:
+        try:
+            base = float(market["close"].iloc[oi])
+        except Exception:
+            continue
+        if not np.isfinite(base) or base <= 0:
+            continue
+        level = base * (1.0 + move) if direction == "SUBIDA" else base * (1.0 - move)
+        first = None
+        for step in range(1, max_bars + 1):
+            j = oi + step
+            if j >= n:
+                break
+            try:
+                if direction == "SUBIDA":
+                    touched = float(market["high"].iloc[j]) >= level
+                else:
+                    touched = float(market["low"].iloc[j]) <= level
+            except Exception:
+                touched = False
+            if touched:
+                first = step
+                break
+        if first is not None:
+            hit_times.append(int(first))
+
+    n_cases = int(len(chosen_orig))
+    n_hits = int(len(hit_times))
+    hit_rate = float(n_hits / n_cases) if n_cases else 0.0
+    if n_hits < 5:
+        return {
+            "n_cases": n_cases, "n_hits": n_hits, "hit_rate": hit_rate,
+            "valid": False, "max_bars": max_bars,
+        }
+
+    q = np.quantile(np.asarray(hit_times, dtype=float), [0.25, 0.50, 0.75])
+    # Require a majority of comparable cases to touch the move inside the tested
+    # window before calling this an ETA.
+    valid = bool(n_cases >= 15 and n_hits >= 7 and hit_rate >= 0.55)
+    return {
+        "n_cases": n_cases,
+        "n_hits": n_hits,
+        "hit_rate": hit_rate,
+        "q25_bars": int(max(1, round(float(q[0])))),
+        "median_bars": int(max(1, round(float(q[1])))),
+        "q75_bars": int(max(1, round(float(q[2])))),
+        "max_bars": max_bars,
+        "valid": valid,
+    }
