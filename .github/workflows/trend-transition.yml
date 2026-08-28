@@ -1,41 +1,21 @@
-name: Trend transition detector
+name: Validate market brain
 
 on:
   push:
     paths:
-      - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/add_backtest_market_gate_eta.py'
+      - 'app.py'
       - 'src/engines/pattern_engine.py'
+      - '.github/workflows/trend-transition.yml'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  patch:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Apply backtest and market safety gate
-        run: python .github/scripts/add_backtest_market_gate_eta.py
 
       - name: Syntax check
         run: |
           python -m py_compile app.py
           python -m py_compile src/engines/pattern_engine.py
-
-      - name: Commit app changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app.py src/engines/pattern_engine.py
-          if git diff --cached --quiet; then
-            echo "No app changes needed"
-          else
-            git commit -m "Add historical backtest gate and true target ETA"
-            git push
-          fi
