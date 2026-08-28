@@ -2089,6 +2089,7 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
             continue
         target_value, target_horizon = pair
         target_txt = _market_price_text(target_value, last_price)
+        target_time = _duration_text(timeframe, max(1, int(target_horizon)))
         objective_name = "OBJETIVO SUBIDA" if direction == "SUBIDA" else "OBJETIVO BAJADA"
         fig.add_shape(
             type="line", xref="paper", yref="y",
@@ -2098,7 +2099,7 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
         )
         fig.add_annotation(
             x=0.985, y=target_value, xref="paper", yref="y",
-            text=f"<b>{objective_name} · {target_txt}</b>",
+            text=f"<b>{objective_name} · {target_txt} · aprox. {target_time}</b>",
             showarrow=False, xanchor="right", yanchor=yanchor,
             font={"color": color, "size": 11},
             bgcolor="rgba(8,11,15,0.88)", bordercolor=color,
