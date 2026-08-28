@@ -4,7 +4,8 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/safety_gate_predictive_signals.py'
+      - '.github/scripts/add_backtest_market_gate_eta.py'
+      - 'src/engines/pattern_engine.py'
   workflow_dispatch:
 
 permissions:
@@ -19,20 +20,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply predictive signal safety gate
-        run: python .github/scripts/safety_gate_predictive_signals.py
+      - name: Apply backtest and market safety gate
+        run: python .github/scripts/add_backtest_market_gate_eta.py
 
       - name: Syntax check
-        run: python -m py_compile app.py
+        run: |
+          python -m py_compile app.py
+          python -m py_compile src/engines/pattern_engine.py
 
       - name: Commit app changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app.py
+          git add app.py src/engines/pattern_engine.py
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Gate predictive signals and correct horizon labels"
+            git commit -m "Add historical backtest gate and true target ETA"
             git push
           fi
