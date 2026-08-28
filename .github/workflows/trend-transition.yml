@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/fix_ordered_horizon_strategy.py'
+      - '.github/scripts/add_target_to_active_signal.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fix ordered horizon strategy
-        run: python .github/scripts/fix_ordered_horizon_strategy.py
+      - name: Add target to active signal
+        run: python .github/scripts/add_target_to_active_signal.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Fix stale targets and false sequential reversals"
+            git commit -m "Show target price on active chart signal"
             git push
           fi
