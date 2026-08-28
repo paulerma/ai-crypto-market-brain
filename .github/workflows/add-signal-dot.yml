@@ -1,9 +1,6 @@
 name: Add main signal dot
 
 on:
-  push:
-    paths:
-      - '.github/workflows/add-signal-dot.yml'
   workflow_dispatch:
 
 permissions:
