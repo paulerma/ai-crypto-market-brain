@@ -4,7 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/trend-transition.yml'
-      - '.github/scripts/fix_live_state_headline.py'
+      - '.github/scripts/show_target_eta.py'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +19,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fix live state headline
-        run: python .github/scripts/fix_live_state_headline.py
+      - name: Show target ETA
+        run: python .github/scripts/show_target_eta.py
 
       - name: Syntax check
         run: python -m py_compile app.py
@@ -33,6 +33,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No app changes needed"
           else
-            git commit -m "Invalidate stale lateral state with live signal"
+            git commit -m "Show ETA for both price targets"
             git push
           fi
