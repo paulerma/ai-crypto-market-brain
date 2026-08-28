@@ -1335,7 +1335,7 @@ def _validation_direction_score(features: pd.DataFrame, market: pd.DataFrame, i:
         return 0.0
     row = features.iloc[i]
     prev = features.iloc[i - 3]
-    close = market["close"].astype(float)
+    close = market["close"]
     try:
         ret1 = float(close.iloc[i] / close.iloc[i - 1] - 1.0)
         ret3 = float(close.iloc[i] / close.iloc[i - 3] - 1.0)
@@ -1453,26 +1453,41 @@ def historical_signal_backtest_gate(closed: pd.DataFrame, timeframe: str) -> dic
     test_idx = [i for i in indices if i >= split]
     thresholds = [0.30, 0.40, 0.50, 0.60, 0.70]
 
+    # Precompute once. Threshold tuning must not rerun the feature calculations
+    # thousands of times on every Streamlit refresh.
+    all_eval_idx = sorted(set(indices + [n - 1]))
+    score_cache = {
+        i: _validation_direction_score(features, market, i)
+        for i in all_eval_idx
+    }
+    outcome_cache = {
+        direction: {
+            i: _validation_first_touch(market, features, i, horizon, direction)
+            for i in indices
+        }
+        for direction in ("SUBIDA", "BAJADA")
+    }
+
     def stats(idxs, threshold, direction):
         sign = 1.0 if direction == "SUBIDA" else -1.0
         outcomes = []
         last_signal_i = -10_000
         cooldown = max(1, horizon // 2)
         for i in idxs:
-            score = _validation_direction_score(features, market, i)
+            score = float(score_cache.get(i, 0.0))
             if sign * score < threshold:
                 continue
             if i - last_signal_i <= cooldown:
                 continue
             last_signal_i = i
-            outcomes.append(_validation_first_touch(market, features, i, horizon, direction))
+            outcomes.append(int(outcome_cache[direction].get(i, 0)))
         n_sig = len(outcomes)
         wins = int(sum(outcomes))
         precision = float(wins / n_sig) if n_sig else 0.0
         return {"n": n_sig, "wins": wins, "precision": precision}
 
     directions = {}
-    current_score = _validation_direction_score(features, market, n - 1)
+    current_score = float(score_cache.get(n - 1, 0.0))
     for direction in ("SUBIDA", "BAJADA"):
         tuned = []
         for th in thresholds:
