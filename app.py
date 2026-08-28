@@ -2384,7 +2384,11 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
                 time_label = f"ETA hist. {_duration_text(timeframe, e1)}–{_duration_text(timeframe, e2)}"
         else:
             time_label = f"horizonte {target_time}"
-        objective_name = "OBJETIVO SUBIDA" if direction == "SUBIDA" else "OBJETIVO BAJADA"
+        active_direction = active_signal[2] if active_signal is not None else None
+        if direction == active_direction:
+            objective_name = "OBJETIVO SUBIDA" if direction == "SUBIDA" else "OBJETIVO BAJADA"
+        else:
+            objective_name = "ESCENARIO SUBIDA" if direction == "SUBIDA" else "ESCENARIO BAJADA"
         fig.add_shape(
             type="line", xref="paper", yref="y",
             x0=0.0, x1=1.0, y0=target_value, y1=target_value,
@@ -2929,31 +2933,9 @@ if ui_mode == "Sencillo":
         path_rows = list(path.get("rows") or [])
         transitions = list(path.get("transitions") or [])
 
-        # Current phase: choose the first still-unreached target in the SAME
-        # direction. If the old target was already exceeded, do not keep showing
-        # it as a future objective.
-        if cur in ("SUBIDA", "BAJADA"):
-            current_rows = [r for r in path_rows if r.get("direction") == cur]
-            next_row = None
-            for r in current_rows:
-                tp = r.get("target_price")
-                if tp is None:
-                    continue
-                tp = float(tp)
-                if (cur == "SUBIDA" and tp > live_spot) or (cur == "BAJADA" and tp < live_spot):
-                    next_row = r
-                    break
-            icon = "🟢" if cur == "SUBIDA" else "🔴"
-            label = "SUBIDA" if cur == "SUBIDA" else "BAJADA"
-            if next_row is not None:
-                target_time = _duration_text(timeframe, int(next_row.get("horizon", 1)))
-                target_price = _market_price_text(next_row.get("target_price"), live_spot)
-                st.markdown(f"## {icon} {label} EN CURSO · OBJETIVO A {target_time}: {target_price}")
-            elif current_rows:
-                st.markdown(
-                    f"## {icon} {label} EN CURSO · OBJETIVO ANTERIOR SUPERADO · "
-                    f"PRECIO ACTUAL: {_market_price_text(live_spot, live_spot)}"
-                )
+        # Current trend is descriptive only. Do not print a second "EN CURSO"
+        # trade-like message here; only the validated SEÑAL headline + chart dot
+        # are allowed to look operational.
 
         # Future turns are shown ONLY when the ordered horizon analysis actually
         # flips direction. We no longer manufacture a later DOWN merely because
