@@ -24,6 +24,11 @@ from engines.regime_engine import classify_regime
 from engines.decision_engine import decide, build_entry_setup, build_risk_plan, confluence_analysis
 from engines.pattern_engine import find_similar_cases, ANALOG_FEATURE_COLUMNS
 try:
+    from engines.cycle_engine import historical_cycle_analogues
+except ImportError:
+    def historical_cycle_analogues(*args, **kwargs):
+        return {"ok": False, "reason": "motor de ciclos no disponible"}
+try:
     from engines.pattern_engine import estimate_time_to_move
 except ImportError:
     # Deployment-safe fallback: an older Streamlit worker may briefly load
@@ -1512,9 +1517,10 @@ def historical_signal_backtest_gate(closed: pd.DataFrame, timeframe: str) -> dic
         test = stats(test_idx, chosen, direction)
         sign = 1.0 if direction == "SUBIDA" else -1.0
         current_matches = bool(sign * current_score >= chosen)
+        precision_floor = 0.66 if timeframe in ("1m", "2m", "3m", "5m") else 0.62
         validated = bool(
-            test["n"] >= 12
-            and test["precision"] >= 0.60
+            test["n"] >= 15
+            and test["precision"] >= precision_floor
             and current_matches
         )
         directions[direction] = {
@@ -1558,6 +1564,96 @@ def broad_market_context(symbol_code: str, timeframe: str) -> dict:
     return {"ok": True, "score": float(np.clip(score / total_w, -1.0, 1.0)), "states": states}
 
 
+def _change_pressure_support(closed: pd.DataFrame, candidate: str) -> float:
+    """Early mean-shift/breakout/order-flow pressure for a candidate direction.
+
+    This is deliberately a separate evidence family so MACD/RSI/EMA variants do
+    not get counted repeatedly as if they were independent confirmations.
+    """
+    try:
+        if closed is None or len(closed) < 35:
+            return 0.5
+        df = closed.reset_index(drop=True)
+        close = df["close"].astype(float)
+        logret = np.log(close).diff().dropna()
+        if len(logret) < 28:
+            return 0.5
+
+        recent = float(logret.tail(4).mean())
+        prior = float(logret.iloc[-24:-4].mean())
+        sigma = float(logret.iloc[-32:-4].std())
+        if not np.isfinite(sigma) or sigma <= 1e-9:
+            sigma = float(logret.std())
+        z = (recent - prior) / max(sigma / np.sqrt(4.0), 1e-9)
+        direction_sign = 1.0 if candidate == "SUBIDA" else -1.0
+        support = 0.5 + 0.24 * float(np.tanh(direction_sign * z / 1.8))
+
+        prior_high = float(df["high"].astype(float).iloc[-13:-1].max())
+        prior_low = float(df["low"].astype(float).iloc[-13:-1].min())
+        last_close = float(close.iloc[-1])
+        if candidate == "SUBIDA" and last_close > prior_high:
+            support += 0.10
+        elif candidate == "BAJADA" and last_close < prior_low:
+            support += 0.10
+
+        vol = df["volume"].astype(float)
+        vol_med = float(vol.iloc[-21:-1].median())
+        vol_expansion = bool(vol_med > 0 and float(vol.iloc[-1]) >= 1.25 * vol_med)
+
+        if "taker_base" in df.columns:
+            denom = df["volume"].astype(float).replace(0, np.nan)
+            ratio = (df["taker_base"].astype(float) / denom).replace([np.inf, -np.inf], np.nan)
+            r_now = float(ratio.tail(3).mean())
+            r_prev = float(ratio.iloc[-12:-3].mean())
+            if np.isfinite(r_now) and np.isfinite(r_prev):
+                flow_delta = r_now - r_prev
+                if candidate == "SUBIDA" and r_now >= 0.51 and flow_delta > 0:
+                    support += 0.08
+                elif candidate == "BAJADA" and r_now <= 0.49 and flow_delta < 0:
+                    support += 0.08
+                elif candidate == "SUBIDA" and r_now <= 0.47:
+                    support -= 0.06
+                elif candidate == "BAJADA" and r_now >= 0.53:
+                    support -= 0.06
+
+        if vol_expansion and ((candidate == "SUBIDA" and recent > 0) or (candidate == "BAJADA" and recent < 0)):
+            support += 0.05
+        return float(np.clip(support, 0.05, 0.95))
+    except Exception:
+        return 0.5
+
+
+@st.cache_data(ttl=3600, max_entries=24, show_spinner=False)
+def historical_cycle_context(symbol_code: str) -> dict:
+    """Long-cycle analogue context from closed weekly history.
+
+    BTC is the dominant context for altcoins, while the selected asset contributes
+    its own history when enough weekly data exist.
+    """
+    basket = [(symbol_code, 1.0)] if symbol_code == "BTCUSDT" else [("BTCUSDT", 0.65), (symbol_code, 0.35)]
+    used = []
+    total_w = 0.0
+    combined = 0.0
+    for sym, weight in basket:
+        try:
+            raw = fetch_timeframe_history(sym, "1W", 520)
+            weekly = raw[raw.is_closed].drop(columns=["is_closed"]).reset_index(drop=True)
+            res = historical_cycle_analogues(weekly, k=18)
+            if not res.get("ok"):
+                continue
+            score = float(res.get("score", 0.0))
+            combined += float(weight) * score
+            total_w += float(weight)
+            used.append({"symbol": sym, "weight": float(weight), **res})
+        except Exception:
+            continue
+    if total_w <= 0:
+        return {"ok": False, "score": 0.0, "state": "SIN DATOS", "sources": []}
+    score = float(np.clip(combined / total_w, -1.0, 1.0))
+    state = "ALCISTA" if score >= 0.25 else "BAJISTA" if score <= -0.25 else "MIXTO"
+    return {"ok": True, "score": score, "state": state, "sources": used}
+
+
 @st.cache_data(ttl=45, max_entries=96, show_spinner=False)
 def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe: str, cycle_context: str | None) -> dict:
     """Early reversal detector using multi-horizon + lower-timeframe precursor evidence.
@@ -1596,6 +1692,7 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
             sensors.append(snap)
 
     current_dir = current.get("scenario", "LATERAL")
+    cycle_history = historical_cycle_context(symbol_code)
     # Score BOTH directions every time. This does not run extra models: it reuses
     # the same multi-horizon, precursor and leading-timeframe evidence already
     # calculated above. The UI can therefore always show a probable UP window
@@ -1628,6 +1725,12 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
         sensor_support = float(np.mean(sensor_values)) if sensor_values else 0.5
 
         precursor = _precursor_strength(closed, candidate)
+        change_support = _change_pressure_support(closed, candidate)
+        cycle_score = float(cycle_history.get("score", 0.0)) if cycle_history.get("ok") else 0.0
+        cycle_support = float(np.clip(
+            0.5 + 0.45 * cycle_score * (1.0 if candidate == "SUBIDA" else -1.0),
+            0.05, 0.95
+        ))
         weakening = 0.5 if current_dir == "LATERAL" else 1.0 - float(current.get("strength", 0.5))
 
         immediate = raw_results[0] if raw_results and raw_results[0].get("ok") else {}
@@ -1725,6 +1828,8 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
             "to": candidate,
             "evidence": evidence,
             "market_support": market_support,
+            "cycle_support": cycle_support,
+            "change_support": change_support,
             "future_support": future_support,
             "sensor_support": sensor_support,
             "precursor": precursor,
@@ -2081,47 +2186,95 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
     transition = None
     early_warning = None
     gate_reason = None
+    ml_confirmation = None
     if best:
         family_votes = [
-            float(best.get("future_support", 0.5)) >= 0.56,
+            float(best.get("future_support", 0.5)) >= 0.57,
             float(best.get("precursor", 0.5)) >= 0.60,
             float(best.get("component_support", 0.5)) >= 0.60,
+            float(best.get("change_support", 0.5)) >= 0.58,
         ]
         if sensors:
             family_votes.append(
-                float(best.get("sensor_support", 0.5)) >= 0.56
+                float(best.get("sensor_support", 0.5)) >= 0.57
                 and int(best.get("sensor_agree", 0)) >= 1
             )
-        required_votes = 3 if sensors else 2
+        required_votes = 4 if sensors else 3
+
         val_stats = (historical_validation.get("directions") or {}).get(best.get("to"), {})
         validation_ok = bool(val_stats.get("validated", False))
         market_support = float(best.get("market_support", 0.5))
         market_ok = market_support >= 0.45
+
+        cycle_support = float(best.get("cycle_support", 0.5))
+        cycle_sensitive = timeframe in ("4h", "1D", "1W", "1M")
+        cycle_ok = (not cycle_sensitive) or cycle_support >= 0.34
+
         strong_local_override = bool(
-            best["evidence"] >= 0.72
-            and float(best.get("timing_score", 0.5)) >= 0.62
-            and float(best.get("precursor", 0.5)) >= 0.65
+            best["evidence"] >= 0.74
+            and float(best.get("timing_score", 0.5)) >= 0.64
+            and float(best.get("precursor", 0.5)) >= 0.66
             and float(best.get("component_support", 0.5)) >= 0.65
+            and float(best.get("change_support", 0.5)) >= 0.62
         )
-        signal_gate = (
+
+        preliminary_ok = (
             bool(best.get("timing_ok", False))
-            and float(best.get("timing_score", 0.5)) >= 0.55
+            and float(best.get("timing_score", 0.5)) >= 0.58
             and sum(bool(v) for v in family_votes) >= required_votes
             and validation_ok
             and (market_ok or strong_local_override)
+            and (cycle_ok or strong_local_override)
         )
+
+        # A second, independently trained OOS model confirms signals from 5m up.
+        # It runs only after the cheap filters pass, so normal refreshes stay fast.
+        ml_required = timeframe not in ("1m", "2m", "3m")
+        ml_ok = not ml_required
+        if preliminary_ok and ml_required and len(closed) >= 420:
+            try:
+                ml_h = max(2, int(best.get("timing_bars", 2)))
+                ml_confirmation = model_signal(closed.tail(800).reset_index(drop=True), horizon=ml_h, deep=False)
+                if ml_confirmation.get("ok") and ml_confirmation.get("model_validated"):
+                    p_up = float(ml_confirmation.get("pup", 0.0))
+                    p_down = float(ml_confirmation.get("pdown", 0.0))
+                    p_flat = float(ml_confirmation.get("pflat", 0.0))
+                    target_p = p_up if best.get("to") == "SUBIDA" else p_down
+                    other_p = p_down if best.get("to") == "SUBIDA" else p_up
+                    ml_ok = bool(
+                        target_p >= 0.46
+                        and target_p >= other_p + 0.08
+                        and target_p >= p_flat
+                        and float(ml_confirmation.get("model_agreement", 0.0)) >= (2 / 3)
+                        and ml_confirmation.get("analog_agreement") is not False
+                    )
+                else:
+                    ml_ok = False
+            except Exception:
+                ml_ok = False
+        elif preliminary_ok and ml_required:
+            ml_ok = False
+
+        signal_gate = bool(preliminary_ok and ml_ok)
         if not validation_ok:
             gate_reason = "validación histórica reciente insuficiente"
         elif not (market_ok or strong_local_override):
-            gate_reason = "el contexto BTC/ETH contradice la señal"
+            gate_reason = "BTC/ETH contradicen la señal"
+        elif not (cycle_ok or strong_local_override):
+            gate_reason = "los ciclos históricos contradicen la señal"
+        elif sum(bool(v) for v in family_votes) < required_votes:
+            gate_reason = "faltan familias independientes de confirmación"
+        elif preliminary_ok and ml_required and not ml_ok:
+            gate_reason = "el modelo ML fuera de muestra no confirma"
         elif not signal_gate:
             gate_reason = "confluencia insuficiente"
-        if signal_gate and best["evidence"] >= 0.66:
+
+        if signal_gate and best["evidence"] >= 0.68:
             transition = dict(best)
             transition["probability"] = float(np.clip(best["evidence"], 0.50, 0.85))
-            transition["reliability"] = "ALTA" if best["evidence"] >= 0.72 else "MEDIA"
+            transition["reliability"] = "ALTA" if best["evidence"] >= 0.74 else "MEDIA"
             transition["validation"] = val_stats
-        elif signal_gate and best["evidence"] >= 0.61:
+        elif signal_gate and best["evidence"] >= 0.64:
             early_warning = dict(best)
             early_warning["probability"] = float(np.clip(best["evidence"], 0.50, 0.72))
             early_warning["reliability"] = "TEMPRANA"
@@ -2140,6 +2293,8 @@ def trend_transition_forecast(symbol_code: str, closed: pd.DataFrame, timeframe:
         "primary_forecast": primary_forecast,
         "interim": interim,
         "historical_validation": historical_validation,
+        "cycle_history": cycle_history,
+        "ml_confirmation": ml_confirmation,
         "gate_candidate": best,
         "gate_reason": gate_reason,
         "max_horizon": 8,
@@ -2258,6 +2413,22 @@ def trend_chart(df: pd.DataFrame, symbol: str, timeframe: str, trend_info: dict)
 
     def _target_for_direction(direction: str):
         """Return a current, directionally valid target for UP or DOWN."""
+        _cycle_hist = trend_info.get("cycle_history") or {}
+        _mlc = trend_info.get("ml_confirmation") or {}
+        _audit_bits = []
+        if _cycle_hist.get("ok"):
+            _audit_bits.append(
+                f"Ciclos históricos: {_cycle_hist.get('state','MIXTO')} "
+                f"({_cycle_hist.get('score',0):+.2f})"
+            )
+        if _mlc.get("ok"):
+            _audit_bits.append(
+                f"ML OOS: {_mlc.get('quality_label','N/A')} · "
+                f"acuerdo modelos {_mlc.get('model_agreement',0)*100:.0f}%"
+            )
+        if _audit_bits:
+            st.caption(" · ".join(_audit_bits))
+
         path = trend_info.get("market_path") or {}
         path_rows = list(path.get("rows") or [])
         direction_rows = [
@@ -2834,6 +3005,8 @@ if ui_mode == "Sencillo":
                 "primary_forecast": None,
                 "interim": None,
                 "historical_validation": {"ok": False, "directions": {}},
+                "cycle_history": {"ok": False, "score": 0.0, "state": "SIN DATOS"},
+                "ml_confirmation": None,
                 "gate_candidate": None,
                 "gate_reason": "detector no disponible",
                 "max_horizon": 8,
