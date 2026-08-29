@@ -5,6 +5,7 @@ on:
     paths:
       - 'app.py'
       - 'src/engines/pattern_engine.py'
+      - 'src/engines/cycle_engine.py'
       - '.github/workflows/trend-transition.yml'
   workflow_dispatch:
 
@@ -15,7 +16,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Syntax check
+      - name: Compile strategy modules
         run: |
           python -m py_compile app.py
           python -m py_compile src/engines/pattern_engine.py
+          python -m py_compile src/engines/cycle_engine.py
+
+      - name: Verify module contracts
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          def functions(path):
+              tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+              return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+          pattern = functions("src/engines/pattern_engine.py")
+          cycle = functions("src/engines/cycle_engine.py")
+
+          required_pattern = {"find_similar_cases", "estimate_time_to_move"}
+          required_cycle = {"historical_cycle_analogues", "build_cycle_features"}
+
+          missing = (required_pattern - pattern) | (required_cycle - cycle)
+          if missing:
+              raise SystemExit(f"Missing required engine functions: {sorted(missing)}")
+          print("Strategy module contracts OK")
+          PY
